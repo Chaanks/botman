@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field, computed_field, field_validator
+from pydantic import BaseModel, computed_field, field_validator
 from typing import Optional, List, Dict, Any
 from datetime import datetime
 from enum import Enum

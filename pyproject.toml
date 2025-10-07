@@ -9,4 +9,5 @@ dependencies = [
     "pydantic>=2.11.10",
     "pykka>=4.4.0",
     "ruff>=0.13.3",
+    "textual>=6.2.1",
 ]
