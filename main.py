@@ -2,6 +2,7 @@ from api import ArtifactsClient
 
 TOKEN = "è_é"
 
+
 async def main():
     print("Hello World!")
     api = ArtifactsClient(TOKEN)
@@ -12,4 +13,5 @@ async def main():
 
 if __name__ == "__main__":
     import asyncio
+
     asyncio.run(main())

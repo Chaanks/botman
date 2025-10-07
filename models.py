@@ -3,6 +3,7 @@ from typing import Optional, List, Dict, Any
 from datetime import datetime
 from enum import Enum
 
+
 # ===== Enums =====
 class ItemSlot(str, Enum):
     WEAPON = "weapon"
@@ -18,6 +19,7 @@ class ItemSlot(str, Enum):
     ARTIFACT2 = "artifact2"
     ARTIFACT3 = "artifact3"
 
+
 class Skill(str, Enum):
     MINING = "mining"
     WOODCUTTING = "woodcutting"
@@ -28,40 +30,45 @@ class Skill(str, Enum):
     COOKING = "cooking"
     ALCHEMY = "alchemy"
 
+
 # ===== Basic Types =====
 class Position(BaseModel):
     x: int
     y: int
-    
-    def distance_to(self, other: 'Position') -> int:
+
+    def distance_to(self, other: "Position") -> int:
         """Calculate Manhattan distance to another position"""
         return abs(self.x - other.x) + abs(self.y - other.y)
-    
+
     def __iter__(self):
         """Allow unpacking: x, y = position"""
         return iter((self.x, self.y))
-    
+
     def __str__(self) -> str:
         return f"({self.x}, {self.y})"
+
 
 class SkillLevel(BaseModel):
     level: int
     xp: int
     max_xp: int
-    
+
     @computed_field
     def progress(self) -> float:
         """Progress to next level (0.0 to 1.0)"""
         return self.xp / self.max_xp if self.max_xp > 0 else 0.0
+
 
 class InventoryItem(BaseModel):
     slot: int
     code: str
     quantity: int
 
+
 # ===== Character =====
 class CharacterStats(BaseModel):
     """Character health and combat statistics"""
+
     hp: int
     max_hp: int
     attack_fire: int
@@ -78,24 +85,25 @@ class CharacterStats(BaseModel):
     res_air: int
     haste: int
     critical_strike: int
-    
+
     def total_attack(self) -> int:
         """Sum of all attack elements"""
-        return (self.attack_fire + self.attack_earth + 
-                self.attack_water + self.attack_air)
-    
+        return (
+            self.attack_fire + self.attack_earth + self.attack_water + self.attack_air
+        )
+
     def total_damage(self) -> int:
         """Sum of all damage elements"""
-        return (self.dmg_fire + self.dmg_earth + 
-                self.dmg_water + self.dmg_air)
-    
+        return self.dmg_fire + self.dmg_earth + self.dmg_water + self.dmg_air
+
     def total_resistance(self) -> int:
         """Sum of all resistance elements"""
-        return (self.res_fire + self.res_earth + 
-                self.res_water + self.res_air)
+        return self.res_fire + self.res_earth + self.res_water + self.res_air
+
 
 class CharacterSkills(BaseModel):
     """Character skill levels and experience"""
+
     mining: SkillLevel
     woodcutting: SkillLevel
     fishing: SkillLevel
@@ -105,8 +113,10 @@ class CharacterSkills(BaseModel):
     cooking: SkillLevel
     alchemy: SkillLevel
 
+
 class CharacterEquipment(BaseModel):
     """Character equipped items"""
+
     weapon_slot: Optional[str] = None
     shield_slot: Optional[str] = None
     helmet_slot: Optional[str] = None
@@ -120,25 +130,31 @@ class CharacterEquipment(BaseModel):
     artifact2_slot: Optional[str] = None
     artifact3_slot: Optional[str] = None
 
+
 class CharacterCooldown(BaseModel):
     """Character cooldown information from API"""
+
     cooldown: int = 0
     cooldown_expiration: Optional[datetime] = None
-    
-    @field_validator('cooldown_expiration', mode='before')
+
+    @field_validator("cooldown_expiration", mode="before")
     @classmethod
     def parse_cooldown(cls, v):
         if v is None:
             return None
-        return datetime.fromisoformat(v.replace('Z', '+00:00'))
+        return datetime.fromisoformat(v.replace("Z", "+00:00"))
 
     def __str__(self):
-        expiration = self.cooldown_expiration.isoformat() if self.cooldown_expiration else None
+        expiration = (
+            self.cooldown_expiration.isoformat() if self.cooldown_expiration else None
+        )
         return f"CharacterCooldown(cooldown={self.cooldown}, cooldown_expiration={expiration})"
+
 
 # ===== Character State =====
 class Character(BaseModel):
-    """Complete character state - composed of sub-models"""
+    """Complete character state"""
+
     # Core
     name: str
     account: str
@@ -148,172 +164,170 @@ class Character(BaseModel):
     max_xp: int
     gold: int
     speed: int
-    
+
     # Position
     position: Position
-    
+
     # Composed models
     stats: CharacterStats
     skills: CharacterSkills
     equipment: CharacterEquipment
     cooldown_info: CharacterCooldown
-    
+
     # Inventory
     inventory: List[InventoryItem]
     inventory_max_items: int
-    
+
     # ===== Factory Method =====
     @classmethod
-    def from_api_data(cls, data: dict) -> 'Character':
+    def from_api_data(cls, data: dict) -> "Character":
         """Create Character from flat API response"""
         return cls(
             # Core fields
-            name=data['name'],
-            account=data['account'],
-            skin=data['skin'],
-            level=data['level'],
-            xp=data['xp'],
-            max_xp=data['max_xp'],
-            gold=data['gold'],
-            speed=data['speed'],
-            
+            name=data["name"],
+            account=data["account"],
+            skin=data["skin"],
+            level=data["level"],
+            xp=data["xp"],
+            max_xp=data["max_xp"],
+            gold=data["gold"],
+            speed=data["speed"],
             # Position
-            position=Position(x=data['x'], y=data['y']),
-            
+            position=Position(x=data["x"], y=data["y"]),
             # Stats
             stats=CharacterStats(
-                hp=data['hp'],
-                max_hp=data['max_hp'],
-                attack_fire=data['attack_fire'],
-                attack_earth=data['attack_earth'],
-                attack_water=data['attack_water'],
-                attack_air=data['attack_air'],
-                dmg_fire=data['dmg_fire'],
-                dmg_earth=data['dmg_earth'],
-                dmg_water=data['dmg_water'],
-                dmg_air=data['dmg_air'],
-                res_fire=data['res_fire'],
-                res_earth=data['res_earth'],
-                res_water=data['res_water'],
-                res_air=data['res_air'],
-                haste=data['haste'],
-                critical_strike=data['critical_strike'],
+                hp=data["hp"],
+                max_hp=data["max_hp"],
+                attack_fire=data["attack_fire"],
+                attack_earth=data["attack_earth"],
+                attack_water=data["attack_water"],
+                attack_air=data["attack_air"],
+                dmg_fire=data["dmg_fire"],
+                dmg_earth=data["dmg_earth"],
+                dmg_water=data["dmg_water"],
+                dmg_air=data["dmg_air"],
+                res_fire=data["res_fire"],
+                res_earth=data["res_earth"],
+                res_water=data["res_water"],
+                res_air=data["res_air"],
+                haste=data["haste"],
+                critical_strike=data["critical_strike"],
             ),
-            
             # Skills
             skills=CharacterSkills(
                 mining=SkillLevel(
-                    level=data['mining_level'],
-                    xp=data['mining_xp'],
-                    max_xp=data['mining_max_xp']
+                    level=data["mining_level"],
+                    xp=data["mining_xp"],
+                    max_xp=data["mining_max_xp"],
                 ),
                 woodcutting=SkillLevel(
-                    level=data['woodcutting_level'],
-                    xp=data['woodcutting_xp'],
-                    max_xp=data['woodcutting_max_xp']
+                    level=data["woodcutting_level"],
+                    xp=data["woodcutting_xp"],
+                    max_xp=data["woodcutting_max_xp"],
                 ),
                 fishing=SkillLevel(
-                    level=data['fishing_level'],
-                    xp=data['fishing_xp'],
-                    max_xp=data['fishing_max_xp']
+                    level=data["fishing_level"],
+                    xp=data["fishing_xp"],
+                    max_xp=data["fishing_max_xp"],
                 ),
                 weaponcrafting=SkillLevel(
-                    level=data['weaponcrafting_level'],
-                    xp=data['weaponcrafting_xp'],
-                    max_xp=data['weaponcrafting_max_xp']
+                    level=data["weaponcrafting_level"],
+                    xp=data["weaponcrafting_xp"],
+                    max_xp=data["weaponcrafting_max_xp"],
                 ),
                 gearcrafting=SkillLevel(
-                    level=data['gearcrafting_level'],
-                    xp=data['gearcrafting_xp'],
-                    max_xp=data['gearcrafting_max_xp']
+                    level=data["gearcrafting_level"],
+                    xp=data["gearcrafting_xp"],
+                    max_xp=data["gearcrafting_max_xp"],
                 ),
                 jewelrycrafting=SkillLevel(
-                    level=data['jewelrycrafting_level'],
-                    xp=data['jewelrycrafting_xp'],
-                    max_xp=data['jewelrycrafting_max_xp']
+                    level=data["jewelrycrafting_level"],
+                    xp=data["jewelrycrafting_xp"],
+                    max_xp=data["jewelrycrafting_max_xp"],
                 ),
                 cooking=SkillLevel(
-                    level=data['cooking_level'],
-                    xp=data['cooking_xp'],
-                    max_xp=data['cooking_max_xp']
+                    level=data["cooking_level"],
+                    xp=data["cooking_xp"],
+                    max_xp=data["cooking_max_xp"],
                 ),
                 alchemy=SkillLevel(
-                    level=data['alchemy_level'],
-                    xp=data['alchemy_xp'],
-                    max_xp=data['alchemy_max_xp']
+                    level=data["alchemy_level"],
+                    xp=data["alchemy_xp"],
+                    max_xp=data["alchemy_max_xp"],
                 ),
             ),
-            
             # Equipment
             equipment=CharacterEquipment(
-                weapon_slot=data.get('weapon_slot'),
-                shield_slot=data.get('shield_slot'),
-                helmet_slot=data.get('helmet_slot'),
-                body_armor_slot=data.get('body_armor_slot'),
-                leg_armor_slot=data.get('leg_armor_slot'),
-                boots_slot=data.get('boots_slot'),
-                ring1_slot=data.get('ring1_slot'),
-                ring2_slot=data.get('ring2_slot'),
-                amulet_slot=data.get('amulet_slot'),
-                artifact1_slot=data.get('artifact1_slot'),
-                artifact2_slot=data.get('artifact2_slot'),
-                artifact3_slot=data.get('artifact3_slot'),
+                weapon_slot=data.get("weapon_slot"),
+                shield_slot=data.get("shield_slot"),
+                helmet_slot=data.get("helmet_slot"),
+                body_armor_slot=data.get("body_armor_slot"),
+                leg_armor_slot=data.get("leg_armor_slot"),
+                boots_slot=data.get("boots_slot"),
+                ring1_slot=data.get("ring1_slot"),
+                ring2_slot=data.get("ring2_slot"),
+                amulet_slot=data.get("amulet_slot"),
+                artifact1_slot=data.get("artifact1_slot"),
+                artifact2_slot=data.get("artifact2_slot"),
+                artifact3_slot=data.get("artifact3_slot"),
             ),
-            
             # Cooldown info
             cooldown_info=CharacterCooldown(
-                cooldown=data.get('cooldown', 0),
-                cooldown_expiration=data.get('cooldown_expiration'),
+                cooldown=data.get("cooldown", 0),
+                cooldown_expiration=data.get("cooldown_expiration"),
             ),
-            
             # Inventory
-            inventory=[InventoryItem(**item) for item in data.get('inventory', [])],
-            inventory_max_items=data['inventory_max_items'],
+            inventory=[InventoryItem(**item) for item in data.get("inventory", [])],
+            inventory_max_items=data["inventory_max_items"],
         )
+
     def ready_in(self) -> float:
         """Seconds until can act (0.0 if ready now)"""
         if not self.cooldown_info.cooldown_expiration:
             return 0.0
         now = datetime.now(self.cooldown_info.cooldown_expiration.tzinfo)
         return max(0.0, (self.cooldown_info.cooldown_expiration - now).total_seconds())
-    
+
     def can_act(self) -> bool:
         """Check if character can perform actions"""
         return self.ready_in() == 0.0
-    
+
     def has_item(self, code: str, quantity: int = 1) -> bool:
         """Check if has item in inventory"""
         total = sum(item.quantity for item in self.inventory if item.code == code)
         return total >= quantity
-    
+
     def inventory_space(self) -> int:
         """Available inventory slots"""
         return self.inventory_max_items - len(self.inventory)
-    
+
     def get_skill(self, skill: Skill) -> SkillLevel:
         """Get skill level by enum"""
         return getattr(self.skills, skill.value)
-    
+
     def __str__(self) -> str:
         return f"{self.name} (Lvl {self.level}) @ {self.position} cooldown:{self.cooldown_info}"
-    
+
     def __repr__(self) -> str:
         return f"<Character: {self.name} L{self.level} HP:{self.stats.hp}/{self.stats.max_hp} CD:{self.cooldown_info}>"
 
+
 # ===== Action Results =====
+
 
 class Cooldown(BaseModel):
     """Action cooldown information"""
+
     total_seconds: int
     started_at: datetime
     expiration: datetime
     reason: str
-    
-    @field_validator('started_at', 'expiration', mode='before')
+
+    @field_validator("started_at", "expiration", mode="before")
     @classmethod
     def parse_datetime(cls, v):
         if isinstance(v, str):
-            return datetime.fromisoformat(v.replace('Z', '+00:00'))
+            return datetime.fromisoformat(v.replace("Z", "+00:00"))
         return v
 
     def __str__(self):
@@ -322,18 +336,24 @@ class Cooldown(BaseModel):
             f"expires={self.expiration.isoformat()})"
         )
 
+
 class ActionResult(BaseModel):
     """Base result from any character action"""
+
     cooldown: Cooldown
     character: Character
 
+
 class ItemDrop(BaseModel):
     """Item dropped from combat or gathering"""
+
     code: str
     quantity: int
 
+
 class Fight(BaseModel):
     """Combat encounter details"""
+
     xp: int
     gold: int
     drops: List[ItemDrop]
@@ -343,95 +363,129 @@ class Fight(BaseModel):
     logs: List[str]
     result: str  # "win" or "lose"
 
+
 class FightResult(ActionResult):
     """Fight action outcome"""
+
     fight: Fight
+
 
 class SkillGain(BaseModel):
     """Resources gained from skill action"""
+
     xp: int
     items: List[ItemDrop]
 
+
 class GatherResult(ActionResult):
     """Gathering action outcome"""
+
     details: SkillGain
+
 
 class CraftResult(ActionResult):
     """Crafting action outcome"""
+
     details: SkillGain
+
 
 class RecycleResult(ActionResult):
     """Recycling action outcome"""
+
     details: SkillGain
+
 
 class EquipmentChange(BaseModel):
     """Equipment slot modification"""
+
     slot: str
     item: Optional[str] = None
     quantity: int
 
+
 class EquipResult(ActionResult):
     """Equipment change outcome"""
+
     details: EquipmentChange
+
 
 class Movement(BaseModel):
     """Character movement details"""
+
     old_position: Position
     new_position: Position
 
+
 class MoveResult(ActionResult):
     """Movement action outcome"""
+
     destination: Movement
+
 
 # ===== Bank =====
 
+
 class Bank(BaseModel):
     """Bank account state"""
+
     slots: int
     expansions: int
     next_expansion_cost: int
     gold: int
 
+
 class BankItem(BaseModel):
     """Item in bank storage"""
+
     code: str
     quantity: int
 
+
 class BankResult(ActionResult):
     """Bank transaction outcome"""
+
     bank: Bank
+
 
 # ===== Trade =====
 
+
 class Trade(BaseModel):
     """Transaction details"""
+
     code: str
     quantity: int
     price: int
     total_price: int
 
+
 class TradeResult(ActionResult):
     """NPC trade outcome"""
+
     transaction: Trade
+
 
 class GEOrder(BaseModel):
     """Grand Exchange sell order"""
+
     id: str
     created_at: datetime
     code: str
     quantity: int
     price: int
     total_price: int
-    
-    @field_validator('created_at', mode='before')
+
+    @field_validator("created_at", mode="before")
     @classmethod
     def parse_datetime(cls, v):
         if isinstance(v, str):
-            return datetime.fromisoformat(v.replace('Z', '+00:00'))
+            return datetime.fromisoformat(v.replace("Z", "+00:00"))
         return v
+
 
 class GETransaction(BaseModel):
     """Completed Grand Exchange sale"""
+
     id: str
     seller: str
     buyer: str
@@ -440,44 +494,58 @@ class GETransaction(BaseModel):
     price: int
     total_price: int
     sold_at: datetime
-    
-    @field_validator('sold_at', mode='before')
+
+    @field_validator("sold_at", mode="before")
     @classmethod
     def parse_datetime(cls, v):
         if isinstance(v, str):
-            return datetime.fromisoformat(v.replace('Z', '+00:00'))
+            return datetime.fromisoformat(v.replace("Z", "+00:00"))
         return v
+
 
 class GEResult(ActionResult):
     """Grand Exchange transaction outcome"""
+
     transaction: Trade
+
 
 # ===== Tasks =====
 
+
 class Task(BaseModel):
     """Active task details"""
+
     code: str
     type: str  # "monsters" or "items"
     total: int
     progress: int = 0
 
+
 class TaskReward(BaseModel):
     """Task completion reward"""
+
     code: str
     quantity: int
 
+
 class TaskResult(ActionResult):
     """Task acceptance outcome"""
+
     task: Task
+
 
 class TaskCompleteResult(ActionResult):
     """Task completion outcome"""
+
     rewards: List[TaskReward]
+
 
 # ===== Account =====
 
+
 class Account(BaseModel):
     """Player account details"""
+
     username: str
     email: Optional[str] = None
     subscribed: bool
@@ -485,8 +553,10 @@ class Account(BaseModel):
     gems: int
     achievements_points: int
 
+
 class CharacterInfo(BaseModel):
     """Character summary for lists"""
+
     name: str
     account: str
     skin: str
@@ -511,22 +581,27 @@ class CharacterInfo(BaseModel):
     task_total: Optional[int] = None
     inventory_max_items: int
     cooldown_expiration: Optional[datetime] = None
-    
-    @field_validator('cooldown_expiration', mode='before')
+
+    @field_validator("cooldown_expiration", mode="before")
     @classmethod
     def parse_datetime(cls, v):
         if v is None or isinstance(v, datetime):
             return v
-        return datetime.fromisoformat(v.replace('Z', '+00:00'))
+        return datetime.fromisoformat(v.replace("Z", "+00:00"))
+
 
 class CharacterList(BaseModel):
     """Account character list"""
+
     characters: List[CharacterInfo]
+
 
 # ===== Logs =====
 
+
 class LogEntry(BaseModel):
     """Action history entry"""
+
     character: str
     account: str
     type: str
@@ -535,26 +610,31 @@ class LogEntry(BaseModel):
     cooldown: int
     cooldown_expiration: datetime
     created_at: datetime
-    
-    @field_validator('cooldown_expiration', 'created_at', mode='before')
+
+    @field_validator("cooldown_expiration", "created_at", mode="before")
     @classmethod
     def parse_datetime(cls, v):
         if isinstance(v, str):
-            return datetime.fromisoformat(v.replace('Z', '+00:00'))
+            return datetime.fromisoformat(v.replace("Z", "+00:00"))
         return v
+
 
 class LogPage(BaseModel):
     """Paginated action logs"""
+
     data: List[LogEntry]
     total: int
     page: int
     size: int
     pages: int
 
+
 # ===== Achievements =====
+
 
 class Achievement(BaseModel):
     """Achievement details"""
+
     name: str
     code: str
     description: str
@@ -563,8 +643,10 @@ class Achievement(BaseModel):
     target: Optional[int] = None
     total: Optional[int] = None
 
+
 class AccountAchievement(BaseModel):
     """Account achievement with progress"""
+
     name: str
     code: str
     description: str
@@ -574,61 +656,76 @@ class AccountAchievement(BaseModel):
     total: Optional[int] = None
     progress: int
     completed_at: Optional[datetime] = None
-    
-    @field_validator('completed_at', mode='before')
+
+    @field_validator("completed_at", mode="before")
     @classmethod
     def parse_datetime(cls, v):
         if v is None or isinstance(v, datetime):
             return v
-        return datetime.fromisoformat(v.replace('Z', '+00:00'))
+        return datetime.fromisoformat(v.replace("Z", "+00:00"))
+
 
 class AchievementPage(BaseModel):
     """Paginated achievements"""
+
     data: List[Achievement]
     total: int
     page: int
     size: int
     pages: int
 
+
 class AccountAchievementPage(BaseModel):
     """Paginated account achievements"""
+
     data: List[AccountAchievement]
     total: int
     page: int
     size: int
     pages: int
 
+
 # ===== Badges =====
+
 
 class Badge(BaseModel):
     """Badge details"""
+
     code: str
     name: str
     description: str
     season: Optional[str] = None
 
+
 class BadgePage(BaseModel):
     """Paginated badges"""
+
     data: List[Badge]
     total: int
     page: int
     size: int
     pages: int
 
+
 # ===== Public Account =====
+
 
 class PublicAccount(BaseModel):
     """Public account information"""
+
     username: str
     badges: List[str] = []
     achievements_points: int
     banned: bool = False
     ban_reason: Optional[str] = None
 
+
 # ===== Effects =====
+
 
 class Effect(BaseModel):
     """Effect details"""
+
     name: str
     code: str
     description: Optional[str] = None
@@ -637,23 +734,30 @@ class Effect(BaseModel):
     duration: int = 0
     target: Optional[str] = None
 
+
 class EffectPage(BaseModel):
     """Paginated effects"""
+
     data: List[Effect]
     total: int
     page: int
     size: int
     pages: int
 
+
 # ===== Events =====
+
 
 class EventContent(BaseModel):
     """Event content reference"""
+
     type: str
     code: str
 
+
 class Event(BaseModel):
     """Event details"""
+
     name: str
     code: str
     map: EventContent
@@ -661,16 +765,18 @@ class Event(BaseModel):
     duration: int
     expiration: datetime
     rate: int
-    
-    @field_validator('expiration', mode='before')
+
+    @field_validator("expiration", mode="before")
     @classmethod
     def parse_datetime(cls, v):
         if isinstance(v, str):
-            return datetime.fromisoformat(v.replace('Z', '+00:00'))
+            return datetime.fromisoformat(v.replace("Z", "+00:00"))
         return v
+
 
 class ActiveEvent(BaseModel):
     """Active event details"""
+
     name: str
     code: str
     map: EventContent
@@ -678,44 +784,55 @@ class ActiveEvent(BaseModel):
     duration: int
     expiration: datetime
     created_at: datetime
-    
-    @field_validator('expiration', 'created_at', mode='before')
+
+    @field_validator("expiration", "created_at", mode="before")
     @classmethod
     def parse_datetime(cls, v):
         if isinstance(v, str):
-            return datetime.fromisoformat(v.replace('Z', '+00:00'))
+            return datetime.fromisoformat(v.replace("Z", "+00:00"))
         return v
+
 
 class EventPage(BaseModel):
     """Paginated events"""
+
     data: List[Event]
     total: int
     page: int
     size: int
     pages: int
 
+
 class ActiveEventPage(BaseModel):
     """Paginated active events"""
+
     data: List[ActiveEvent]
     total: int
     page: int
     size: int
     pages: int
 
+
 # ===== Items =====
+
 
 class CraftRequirement(BaseModel):
     """Crafting material requirement"""
+
     code: str
     quantity: int
 
+
 class ItemEffect(BaseModel):
     """Item effect"""
+
     name: str
     value: int
 
+
 class Item(BaseModel):
     """Item details"""
+
     name: str
     code: str
     level: int
@@ -726,23 +843,30 @@ class Item(BaseModel):
     craft: Optional[dict] = None
     tradeable: bool = True
 
+
 class ItemPage(BaseModel):
     """Paginated items"""
+
     data: List[Item]
     total: int
     page: int
     size: int
     pages: int
 
+
 # ===== Maps =====
+
 
 class MapContent(BaseModel):
     """Map content details"""
+
     type: str
     code: str
 
+
 class Map(BaseModel):
     """Map details"""
+
     name: str
     skin: str
     x: int
@@ -751,25 +875,32 @@ class Map(BaseModel):
     content: Optional[MapContent] = None
     access_type: Optional[str] = None
 
+
 class MapPage(BaseModel):
     """Paginated maps"""
+
     data: List[Map]
     total: int
     page: int
     size: int
     pages: int
 
+
 # ===== Monsters =====
+
 
 class MonsterDrop(BaseModel):
     """Monster drop information"""
+
     code: str
     rate: int
     min_quantity: int
     max_quantity: int
 
+
 class Monster(BaseModel):
     """Monster details"""
+
     name: str
     code: str
     level: int
@@ -786,18 +917,23 @@ class Monster(BaseModel):
     max_gold: int = 0
     drops: List[MonsterDrop] = []
 
+
 class MonsterPage(BaseModel):
     """Paginated monsters"""
+
     data: List[Monster]
     total: int
     page: int
     size: int
     pages: int
 
+
 # ===== NPCs =====
+
 
 class NPC(BaseModel):
     """NPC details"""
+
     name: str
     code: str
     skin: str
@@ -805,8 +941,10 @@ class NPC(BaseModel):
     y: int
     type: str
 
+
 class NPCItem(BaseModel):
     """NPC item for trade"""
+
     code: str
     item_code: str
     item_name: str
@@ -819,51 +957,65 @@ class NPCItem(BaseModel):
     min_quantity: int = 1
     max_quantity: int = 1
 
+
 class NPCPage(BaseModel):
     """Paginated NPCs"""
+
     data: List[NPC]
     total: int
     page: int
     size: int
     pages: int
 
+
 class NPCItemPage(BaseModel):
     """Paginated NPC items"""
+
     data: List[NPCItem]
     total: int
     page: int
     size: int
     pages: int
 
+
 # ===== Resources =====
+
 
 class ResourceDrop(BaseModel):
     """Resource drop information"""
+
     code: str
     rate: int
     min_quantity: int
     max_quantity: int
 
+
 class Resource(BaseModel):
     """Resource details"""
+
     name: str
     code: str
     skill: str
     level: int
     drops: List[ResourceDrop] = []
 
+
 class ResourcePage(BaseModel):
     """Paginated resources"""
+
     data: List[Resource]
     total: int
     page: int
     size: int
     pages: int
 
+
 # ===== Leaderboards =====
+
 
 class CharacterLeaderboard(BaseModel):
     """Character leaderboard entry"""
+
     name: str
     account: str
     skin: str
@@ -880,31 +1032,40 @@ class CharacterLeaderboard(BaseModel):
     cooking_level: int
     alchemy_level: int
 
+
 class AccountLeaderboard(BaseModel):
     """Account leaderboard entry"""
+
     account: str
     achievements_points: int
 
+
 class CharacterLeaderboardPage(BaseModel):
     """Paginated character leaderboard"""
+
     data: List[CharacterLeaderboard]
     total: int
     page: int
     size: int
     pages: int
 
+
 class AccountLeaderboardPage(BaseModel):
     """Paginated account leaderboard"""
+
     data: List[AccountLeaderboard]
     total: int
     page: int
     size: int
     pages: int
 
+
 # ===== Active Characters =====
+
 
 class ActiveCharacter(BaseModel):
     """Currently active character summary"""
+
     name: str
     account: str
     skin: str
@@ -912,18 +1073,23 @@ class ActiveCharacter(BaseModel):
     x: int
     y: int
 
+
 class ActiveCharacterPage(BaseModel):
     """Paginated active characters"""
+
     data: List[ActiveCharacter]
     total: int
     page: int
     size: int
     pages: int
 
+
 # ===== GE History (public) =====
+
 
 class GEOrderHistory(BaseModel):
     """Grand Exchange order history entry"""
+
     id: str
     seller: str
     buyer: str
@@ -932,34 +1098,41 @@ class GEOrderHistory(BaseModel):
     price: int
     total_price: int
     sold_at: datetime
-    
-    @field_validator('sold_at', mode='before')
+
+    @field_validator("sold_at", mode="before")
     @classmethod
     def parse_datetime(cls, v):
         if isinstance(v, str):
-            return datetime.fromisoformat(v.replace('Z', '+00:00'))
+            return datetime.fromisoformat(v.replace("Z", "+00:00"))
         return v
+
 
 class GEOrderHistoryPage(BaseModel):
     """Paginated GE order history"""
+
     data: List[GEOrderHistory]
     total: int
     page: int
     size: int
     pages: int
 
+
 class GEOrderPage(BaseModel):
     """Paginated GE orders"""
+
     data: List[GEOrder]
     total: int
     page: int
     size: int
     pages: int
 
+
 # ===== Tasks =====
+
 
 class TaskFull(BaseModel):
     """Full task details"""
+
     code: str
     level: int
     type: str  # "monsters" or "items"
@@ -968,33 +1141,42 @@ class TaskFull(BaseModel):
     skill: Optional[str] = None
     rewards: TaskReward
 
+
 class TaskFullPage(BaseModel):
     """Paginated full tasks"""
+
     data: List[TaskFull]
     total: int
     page: int
     size: int
     pages: int
 
+
 class TaskRewardDrop(BaseModel):
     """Task reward drop rate"""
+
     code: str
     rate: int
     min_quantity: int
     max_quantity: int
 
+
 class TaskRewardDropPage(BaseModel):
     """Paginated task reward drops"""
+
     data: List[TaskRewardDrop]
     total: int
     page: int
     size: int
     pages: int
 
+
 # ===== Simulation =====
+
 
 class FakeCharacter(BaseModel):
     """Fake character for combat simulation"""
+
     level: int
     weapon_slot: Optional[str] = None
     rune_slot: Optional[str] = None
@@ -1014,42 +1196,54 @@ class FakeCharacter(BaseModel):
     utility2_slot: Optional[str] = None
     utility2_slot_quantity: int = 1
 
+
 class CombatResult(BaseModel):
     """Single combat result"""
+
     result: str  # "win" or "loss"
     turns: int
     logs: List[str]
     character_results: List[Dict[str, Any]]
 
+
 class CombatSimulation(BaseModel):
     """Combat simulation results"""
+
     results: List[CombatResult]
     wins: int
     losses: int
     winrate: float
 
+
 # ===== Token =====
+
 
 class TokenResponse(BaseModel):
     """API token response"""
+
     token: str
+
 
 # ===== Server =====
 
+
 class Announcement(BaseModel):
     """Server announcement"""
+
     message: str
     created_at: datetime
-    
-    @field_validator('created_at', mode='before')
+
+    @field_validator("created_at", mode="before")
     @classmethod
     def parse_datetime(cls, v):
         if isinstance(v, str):
-            return datetime.fromisoformat(v.replace('Z', '+00:00'))
+            return datetime.fromisoformat(v.replace("Z", "+00:00"))
         return v
+
 
 class ServerStatus(BaseModel):
     """Game server state"""
+
     status: str
     version: str
     max_level: int
@@ -1058,18 +1252,21 @@ class ServerStatus(BaseModel):
     announcements: List[Announcement]
     last_wipe: Optional[datetime] = None
     next_wipe: Optional[datetime] = None
-    
-    @field_validator('server_time', 'last_wipe', 'next_wipe', mode='before')
+
+    @field_validator("server_time", "last_wipe", "next_wipe", mode="before")
     @classmethod
     def parse_datetime(cls, v):
         if v is None or isinstance(v, datetime):
             return v
-        return datetime.fromisoformat(v.replace('Z', '+00:00'))
+        return datetime.fromisoformat(v.replace("Z", "+00:00"))
+
 
 # ===== Errors =====
 
+
 class ApiError(BaseModel):
     """API error information"""
+
     code: int
     message: str
     data: Optional[Dict[str, Any]] = None
