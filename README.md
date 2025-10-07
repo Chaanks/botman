@@ -10,7 +10,7 @@
 ```
 ┌───────────────────────────────────────────────────────┐
 │                     TEXTUAL TUI                       │
-│      Dashboard | Task Queue | Logs | Task Inpu        │
+│      Dashboard | Task Queue | Logs | Task Input       │
 └────────────────────────────┬──────────────────────────┘
                              │
                     Subscribes/Publishes
