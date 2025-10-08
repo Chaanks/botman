@@ -142,7 +142,9 @@ class ResourceNotFoundError(TaskError):
 
     def __init__(self, resource_code: str):
         self.resource_code = resource_code
-        super().__init__(f"Cannot find gathering location for resource: {resource_code}")
+        super().__init__(
+            f"Cannot find gathering location for resource: {resource_code}"
+        )
 
 
 class MonsterNotFoundError(TaskError):

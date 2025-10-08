@@ -82,9 +82,7 @@ class World:
             return (map_obj.x, map_obj.y)
         return None
 
-    def available_gathering_resources(
-        self, skill: Skill, level: int
-    ) -> list[Resource]:
+    def available_gathering_resources(self, skill: Skill, level: int) -> list[Resource]:
         resources = [
             res
             for res in self.resources.values()
@@ -93,7 +91,9 @@ class World:
         resources.sort(key=lambda r: r.level, reverse=True)
         return resources
 
-    def highest_gathering_resource(self, skill: Skill, level: int) -> Optional[Resource]:
+    def highest_gathering_resource(
+        self, skill: Skill, level: int
+    ) -> Optional[Resource]:
         available = self.available_gathering_resources(skill, level)
         return available[0] if available else None
 
@@ -128,7 +128,6 @@ class World:
                     queue.append(mat["code"])
 
         return graph
-
 
     def items_by_type(self, item_type: str) -> list[Item]:
         """Get all items of a specific type"""

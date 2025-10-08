@@ -11,7 +11,6 @@ from errors import (
 
 @dataclass
 class GatherTask(Task):
-
     resource_code: str
     target_amount: int
     gathered_amount: int = 0
@@ -94,9 +93,7 @@ class GatherTask(Task):
                 paused=True,
                 character=context.character,
                 error=f"[{e.code}] Inventory full",
-                log_messages=[
-                    ("Inventory is full, pausing until deposit", "WARNING")
-                ],
+                log_messages=[("Inventory is full, pausing until deposit", "WARNING")],
             )
         except CharacterInCooldownError as e:
             # Should not happen as bot manages cooldowns, but handle anyway

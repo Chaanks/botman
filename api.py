@@ -215,36 +215,28 @@ class ArtifactsClient:
 
     # ===== Bank actions =====
 
-    async def deposit_gold(
-        self, quantity: int, name: str = None
-    ) -> BankResult:
+    async def deposit_gold(self, quantity: int, name: str = None) -> BankResult:
         """Deposit gold in bank"""
         data = await self._request(
             "POST", f"/my/{name}/action/bank/deposit/gold", {"quantity": quantity}
         )
         return BankResult.model_validate(data)
 
-    async def deposit_item(
-        self, items: List[dict], name: str = None
-    ) -> BankResult:
+    async def deposit_item(self, items: List[dict], name: str = None) -> BankResult:
         """Deposit items in bank. items = [{"code": "item_code", "quantity": 1}, ...]"""
         data = await self._request(
             "POST", f"/my/{name}/action/bank/deposit/item", items
         )
         return BankResult.model_validate(data)
 
-    async def withdraw_gold(
-        self, quantity: int, name: str = None
-    ) -> BankResult:
+    async def withdraw_gold(self, quantity: int, name: str = None) -> BankResult:
         """Withdraw gold from bank"""
         data = await self._request(
             "POST", f"/my/{name}/action/bank/withdraw/gold", {"quantity": quantity}
         )
         return BankResult.model_validate(data)
 
-    async def withdraw_item(
-        self, items: List[dict], name: str = None
-    ) -> BankResult:
+    async def withdraw_item(self, items: List[dict], name: str = None) -> BankResult:
         """Withdraw items from bank. items = [{"code": "item_code", "quantity": 1}, ...]"""
         data = await self._request(
             "POST", f"/my/{name}/action/bank/withdraw/item", items
@@ -282,9 +274,7 @@ class ArtifactsClient:
 
     # ===== Grand Exchange actions =====
 
-    async def ge_buy(
-        self, order_id: str, quantity: int, name: str = None
-    ) -> GEResult:
+    async def ge_buy(self, order_id: str, quantity: int, name: str = None) -> GEResult:
         """Buy item from Grand Exchange"""
         data = await self._request(
             "POST",
