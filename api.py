@@ -1,6 +1,7 @@
 import httpx
 from typing import Optional
 from models import *
+from errors import ArtifactsError, error_from_response
 
 
 class ArtifactsClient:
@@ -8,23 +9,62 @@ class ArtifactsClient:
 
     def __init__(self, token: str):
         self.token = token
-        self.client = httpx.AsyncClient(
-            headers={
-                "Authorization": f"Bearer {token}",
-                "Content-Type": "application/json",
-                "Accept": "application/json",
-            },
-            timeout=10.0,
-        )
+        self._client = None
+
+    @property
+    def client(self) -> httpx.AsyncClient:
+        """Lazy-load the async client to ensure it's created in the right event loop"""
+        if self._client is None:
+            self._client = httpx.AsyncClient(
+                headers={
+                    "Authorization": f"Bearer {self.token}",
+                    "Content-Type": "application/json",
+                    "Accept": "application/json",
+                },
+                timeout=10.0,
+            )
+        return self._client
 
     async def _request(
         self, method: str, endpoint: str, json: Optional[dict] = None
     ) -> dict:
-        response = await self.client.request(
-            method, f"{self.BASE_URL}{endpoint}", json=json
-        )
-        response.raise_for_status()
-        return response.json()["data"]
+        try:
+            response = await self.client.request(
+                method, f"{self.BASE_URL}{endpoint}", json=json
+            )
+            response.raise_for_status()
+            return response.json()["data"]
+        except httpx.HTTPStatusError as e:
+            # Parse API error response
+            try:
+                error_data = e.response.json().get("error", {})
+                code = error_data.get("code", e.response.status_code)
+                message = error_data.get("message", str(e))
+                raise error_from_response(code, message) from e
+            except (ValueError, KeyError):
+                # Fallback if response is not valid JSON
+                raise ArtifactsError(e.response.status_code, str(e)) from e
+
+    async def _request_paginated(
+        self, method: str, endpoint: str, json: Optional[dict] = None
+    ) -> dict:
+        """Request that returns full response (for paginated endpoints)"""
+        try:
+            response = await self.client.request(
+                method, f"{self.BASE_URL}{endpoint}", json=json
+            )
+            response.raise_for_status()
+            return response.json()  # Return full response, not just ["data"]
+        except httpx.HTTPStatusError as e:
+            # Parse API error response
+            try:
+                error_data = e.response.json().get("error", {})
+                code = error_data.get("code", e.response.status_code)
+                message = error_data.get("message", str(e))
+                raise error_from_response(code, message) from e
+            except (ValueError, KeyError):
+                # Fallback if response is not valid JSON
+                raise ArtifactsError(e.response.status_code, str(e)) from e
 
     # ===== Server details =====
     async def get_server_status(self) -> ServerStatus:
@@ -84,10 +124,9 @@ class ArtifactsClient:
         return Account.model_validate(data)
 
     async def get_logs(
-        self, name: Optional[str] = None, page: int = 1, size: int = 50
+        self, name: str = None, page: int = 1, size: int = 50
     ) -> LogPage:
         """Get character action history"""
-        name = name or self.character_name
         endpoint = f"/my/logs/{name}?page={page}&size={size}"
         data = await self._request("GET", endpoint)
         return LogPage.model_validate(data)
@@ -106,29 +145,25 @@ class ArtifactsClient:
         )
 
     # ===== My characters =====
-    async def move(self, x: int, y: int, name: Optional[str] = None) -> MoveResult:
+    async def move(self, x: int, y: int, name: str = None) -> MoveResult:
         """Move character to position (x, y)"""
-        name = name or self.character_name
         data = await self._request("POST", f"/my/{name}/action/move", {"x": x, "y": y})
         return MoveResult.model_validate(data)
 
-    async def transition(self, name: Optional[str] = None) -> ActionResult:
+    async def transition(self, name: str = None) -> ActionResult:
         """Execute a transition to another layer"""
-        name = name or self.character_name
         data = await self._request("POST", f"/my/{name}/action/transition")
         return ActionResult.model_validate(data)
 
-    async def rest(self, name: Optional[str] = None) -> ActionResult:
+    async def rest(self, name: str = None) -> ActionResult:
         """Rest to recover HP"""
-        name = name or self.character_name
         data = await self._request("POST", f"/my/{name}/action/rest")
         return ActionResult.model_validate(data)
 
     async def equip(
-        self, item_code: str, slot: str, quantity: int = 1, name: Optional[str] = None
+        self, item_code: str, slot: str, quantity: int = 1, name: str = None
     ) -> EquipResult:
         """Equip an item"""
-        name = name or self.character_name
         data = await self._request(
             "POST",
             f"/my/{name}/action/equip",
@@ -137,45 +172,40 @@ class ArtifactsClient:
         return EquipResult.model_validate(data)
 
     async def unequip(
-        self, slot: str, quantity: int = 1, name: Optional[str] = None
+        self, slot: str, quantity: int = 1, name: str = None
     ) -> EquipResult:
         """Unequip an item"""
-        name = name or self.character_name
         data = await self._request(
             "POST", f"/my/{name}/action/unequip", {"slot": slot, "quantity": quantity}
         )
         return EquipResult.model_validate(data)
 
     async def use_item(
-        self, item_code: str, quantity: int = 1, name: Optional[str] = None
+        self, item_code: str, quantity: int = 1, name: str = None
     ) -> ActionResult:
         """Use a consumable item"""
-        name = name or self.character_name
         data = await self._request(
             "POST", f"/my/{name}/action/use", {"code": item_code, "quantity": quantity}
         )
         return ActionResult.model_validate(data)
 
     async def fight(
-        self, participants: Optional[List[str]] = None, name: Optional[str] = None
+        self, participants: Optional[List[str]] = None, name: str = None
     ) -> FightResult:
         """Start a fight against a monster"""
-        name = name or self.character_name
         body = {"participants": participants or []}
         data = await self._request("POST", f"/my/{name}/action/fight", body)
         return FightResult.model_validate(data)
 
-    async def gather(self, name: Optional[str] = None) -> GatherResult:
+    async def gather(self, name: str = None) -> GatherResult:
         """Harvest a resource on the character's map"""
-        name = name or self.character_name
         data = await self._request("POST", f"/my/{name}/action/gathering")
         return GatherResult.model_validate(data)
 
     async def craft(
-        self, item_code: str, quantity: int = 1, name: Optional[str] = None
+        self, item_code: str, quantity: int = 1, name: str = None
     ) -> CraftResult:
         """Craft an item at a workshop"""
-        name = name or self.character_name
         data = await self._request(
             "POST",
             f"/my/{name}/action/crafting",
@@ -186,58 +216,52 @@ class ArtifactsClient:
     # ===== Bank actions =====
 
     async def deposit_gold(
-        self, quantity: int, name: Optional[str] = None
+        self, quantity: int, name: str = None
     ) -> BankResult:
         """Deposit gold in bank"""
-        name = name or self.character_name
         data = await self._request(
             "POST", f"/my/{name}/action/bank/deposit/gold", {"quantity": quantity}
         )
         return BankResult.model_validate(data)
 
     async def deposit_item(
-        self, items: List[dict], name: Optional[str] = None
+        self, items: List[dict], name: str = None
     ) -> BankResult:
         """Deposit items in bank. items = [{"code": "item_code", "quantity": 1}, ...]"""
-        name = name or self.character_name
         data = await self._request(
             "POST", f"/my/{name}/action/bank/deposit/item", items
         )
         return BankResult.model_validate(data)
 
     async def withdraw_gold(
-        self, quantity: int, name: Optional[str] = None
+        self, quantity: int, name: str = None
     ) -> BankResult:
         """Withdraw gold from bank"""
-        name = name or self.character_name
         data = await self._request(
             "POST", f"/my/{name}/action/bank/withdraw/gold", {"quantity": quantity}
         )
         return BankResult.model_validate(data)
 
     async def withdraw_item(
-        self, items: List[dict], name: Optional[str] = None
+        self, items: List[dict], name: str = None
     ) -> BankResult:
         """Withdraw items from bank. items = [{"code": "item_code", "quantity": 1}, ...]"""
-        name = name or self.character_name
         data = await self._request(
             "POST", f"/my/{name}/action/bank/withdraw/item", items
         )
         return BankResult.model_validate(data)
 
-    async def buy_bank_expansion(self, name: Optional[str] = None) -> BankResult:
+    async def buy_bank_expansion(self, name: str = None) -> BankResult:
         """Buy a 20 slots bank expansion"""
-        name = name or self.character_name
         data = await self._request("POST", f"/my/{name}/action/bank/buy_expansion")
         return BankResult.model_validate(data)
 
     # ===== NPC actions =====
 
     async def npc_buy(
-        self, item_code: str, quantity: int = 1, name: Optional[str] = None
+        self, item_code: str, quantity: int = 1, name: str = None
     ) -> TradeResult:
         """Buy an item from NPC"""
-        name = name or self.character_name
         data = await self._request(
             "POST",
             f"/my/{name}/action/npc/buy",
@@ -246,10 +270,9 @@ class ArtifactsClient:
         return TradeResult.model_validate(data)
 
     async def npc_sell(
-        self, item_code: str, quantity: int = 1, name: Optional[str] = None
+        self, item_code: str, quantity: int = 1, name: str = None
     ) -> TradeResult:
         """Sell an item to NPC"""
-        name = name or self.character_name
         data = await self._request(
             "POST",
             f"/my/{name}/action/npc/sell",
@@ -260,10 +283,9 @@ class ArtifactsClient:
     # ===== Grand Exchange actions =====
 
     async def ge_buy(
-        self, order_id: str, quantity: int, name: Optional[str] = None
+        self, order_id: str, quantity: int, name: str = None
     ) -> GEResult:
         """Buy item from Grand Exchange"""
-        name = name or self.character_name
         data = await self._request(
             "POST",
             f"/my/{name}/action/grandexchange/buy",
@@ -272,10 +294,9 @@ class ArtifactsClient:
         return GEResult.model_validate(data)
 
     async def ge_sell(
-        self, item_code: str, quantity: int, price: int, name: Optional[str] = None
+        self, item_code: str, quantity: int, price: int, name: str = None
     ) -> GEResult:
         """Create sell order at Grand Exchange (3% listing tax)"""
-        name = name or self.character_name
         data = await self._request(
             "POST",
             f"/my/{name}/action/grandexchange/sell",
@@ -283,9 +304,8 @@ class ArtifactsClient:
         )
         return GEResult.model_validate(data)
 
-    async def ge_cancel(self, order_id: str, name: Optional[str] = None) -> GEResult:
+    async def ge_cancel(self, order_id: str, name: str = None) -> GEResult:
         """Cancel a sell order at Grand Exchange"""
-        name = name or self.character_name
         data = await self._request(
             "POST", f"/my/{name}/action/grandexchange/cancel", {"id": order_id}
         )
@@ -293,23 +313,20 @@ class ArtifactsClient:
 
     # ===== Task actions =====
 
-    async def task_accept(self, name: Optional[str] = None) -> TaskResult:
+    async def task_accept(self, name: str = None) -> TaskResult:
         """Accept a new task"""
-        name = name or self.character_name
         data = await self._request("POST", f"/my/{name}/action/task/new")
         return TaskResult.model_validate(data)
 
-    async def task_complete(self, name: Optional[str] = None) -> TaskCompleteResult:
+    async def task_complete(self, name: str = None) -> TaskCompleteResult:
         """Complete current task"""
-        name = name or self.character_name
         data = await self._request("POST", f"/my/{name}/action/task/complete")
         return TaskCompleteResult.model_validate(data)
 
     async def task_trade(
-        self, item_code: str, quantity: int, name: Optional[str] = None
+        self, item_code: str, quantity: int, name: str = None
     ) -> ActionResult:
         """Trade items with Tasks Master"""
-        name = name or self.character_name
         data = await self._request(
             "POST",
             f"/my/{name}/action/task/trade",
@@ -317,25 +334,22 @@ class ArtifactsClient:
         )
         return ActionResult.model_validate(data)
 
-    async def task_cancel(self, name: Optional[str] = None) -> ActionResult:
+    async def task_cancel(self, name: str = None) -> ActionResult:
         """Cancel task for 1 tasks coin"""
-        name = name or self.character_name
         data = await self._request("POST", f"/my/{name}/action/task/cancel")
         return ActionResult.model_validate(data)
 
-    async def task_exchange(self, name: Optional[str] = None) -> TaskCompleteResult:
+    async def task_exchange(self, name: str = None) -> TaskCompleteResult:
         """Exchange 6 task coins for random reward"""
-        name = name or self.character_name
         data = await self._request("POST", f"/my/{name}/action/task/exchange")
         return TaskCompleteResult.model_validate(data)
 
     # ===== Other actions =====
 
     async def recycle(
-        self, item_code: str, quantity: int = 1, name: Optional[str] = None
+        self, item_code: str, quantity: int = 1, name: str = None
     ) -> RecycleResult:
         """Recycle an item at workshop"""
-        name = name or self.character_name
         data = await self._request(
             "POST",
             f"/my/{name}/action/recycling",
@@ -344,10 +358,9 @@ class ArtifactsClient:
         return RecycleResult.model_validate(data)
 
     async def give_gold(
-        self, recipient: str, quantity: int, name: Optional[str] = None
+        self, recipient: str, quantity: int, name: str = None
     ) -> ActionResult:
         """Give gold to another character on same map"""
-        name = name or self.character_name
         data = await self._request(
             "POST",
             f"/my/{name}/action/give/gold",
@@ -356,20 +369,18 @@ class ArtifactsClient:
         return ActionResult.model_validate(data)
 
     async def give_item(
-        self, recipient: str, items: List[dict], name: Optional[str] = None
+        self, recipient: str, items: List[dict], name: str = None
     ) -> ActionResult:
         """Give items to another character. items = [{"code": "item", "quantity": 1}, ...]"""
-        name = name or self.character_name
         data = await self._request(
             "POST", f"/my/{name}/action/give/item", {"name": recipient, "items": items}
         )
         return ActionResult.model_validate(data)
 
     async def delete_item(
-        self, item_code: str, quantity: int, name: Optional[str] = None
+        self, item_code: str, quantity: int, name: str = None
     ) -> ActionResult:
         """Delete item from inventory"""
-        name = name or self.character_name
         data = await self._request(
             "POST",
             f"/my/{name}/action/delete",
@@ -377,9 +388,8 @@ class ArtifactsClient:
         )
         return ActionResult.model_validate(data)
 
-    async def change_skin(self, skin: str, name: Optional[str] = None) -> ActionResult:
+    async def change_skin(self, skin: str, name: str = None) -> ActionResult:
         """Change character skin"""
-        name = name or self.character_name
         data = await self._request(
             "POST", f"/my/{name}/action/change_skin", {"skin": skin}
         )
@@ -468,7 +478,6 @@ class ArtifactsClient:
 
     async def get_character(self, name: str = None) -> Character:
         """Get character details"""
-        name = name or self.character_name
         data = await self._request("GET", f"/characters/{name}")
         return Character.from_api_data(data)
 
@@ -549,7 +558,7 @@ class ArtifactsClient:
     # ===== Items =====
     async def get_items(
         self,
-        name: Optional[str] = None,
+        name: str = None,
         min_level: Optional[int] = None,
         max_level: Optional[int] = None,
         item_type: Optional[str] = None,
@@ -573,7 +582,7 @@ class ArtifactsClient:
         if craft_material:
             params.append(f"craft_material={craft_material}")
         endpoint = f"/items?{'&'.join(params)}"
-        data = await self._request("GET", endpoint)
+        data = await self._request_paginated("GET", endpoint)
         return ItemPage.model_validate(data)
 
     async def get_item(self, code: str) -> Item:
@@ -585,7 +594,7 @@ class ArtifactsClient:
     async def get_characters_leaderboard(
         self,
         sort: Optional[str] = None,
-        name: Optional[str] = None,
+        name: str = None,
         page: int = 1,
         size: int = 50,
     ) -> CharacterLeaderboardPage:
@@ -602,7 +611,7 @@ class ArtifactsClient:
     async def get_accounts_leaderboard(
         self,
         sort: Optional[str] = None,
-        name: Optional[str] = None,
+        name: str = None,
         page: int = 1,
         size: int = 50,
     ) -> AccountLeaderboardPage:
@@ -637,7 +646,7 @@ class ArtifactsClient:
         if hide_blocked_maps:
             params.append("hide_blocked_maps=true")
         endpoint = f"/maps?{'&'.join(params)}"
-        data = await self._request("GET", endpoint)
+        data = await self._request_paginated("GET", endpoint)
         return MapPage.model_validate(data)
 
     async def get_layer_maps(
@@ -674,7 +683,7 @@ class ArtifactsClient:
     # ===== Monsters =====
     async def get_monsters(
         self,
-        name: Optional[str] = None,
+        name: str = None,
         min_level: Optional[int] = None,
         max_level: Optional[int] = None,
         drop: Optional[str] = None,
@@ -692,7 +701,7 @@ class ArtifactsClient:
         if drop:
             params.append(f"drop={drop}")
         endpoint = f"/monsters?{'&'.join(params)}"
-        data = await self._request("GET", endpoint)
+        data = await self._request_paginated("GET", endpoint)
         return MonsterPage.model_validate(data)
 
     async def get_monster(self, code: str) -> Monster:
@@ -703,7 +712,7 @@ class ArtifactsClient:
     # ===== NPCs =====
     async def get_npcs(
         self,
-        name: Optional[str] = None,
+        name: str = None,
         npc_type: Optional[str] = None,
         page: int = 1,
         size: int = 50,
@@ -771,7 +780,7 @@ class ArtifactsClient:
         if drop:
             params.append(f"drop={drop}")
         endpoint = f"/resources?{'&'.join(params)}"
-        data = await self._request("GET", endpoint)
+        data = await self._request_paginated("GET", endpoint)
         return ResourcePage.model_validate(data)
 
     async def get_resource(self, code: str) -> Resource:
@@ -864,7 +873,8 @@ class ArtifactsClient:
             return TokenResponse.model_validate(token_data).token
 
     async def close(self) -> None:
-        await self.client.aclose()
+        if self._client is not None:
+            await self._client.aclose()
 
     async def __aenter__(self):
         return self

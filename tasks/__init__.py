@@ -4,6 +4,7 @@ from abc import ABC, abstractmethod
 
 from api import ArtifactsClient
 from models import Character
+from world import World
 
 
 @dataclass
@@ -12,13 +13,14 @@ class TaskContext:
 
     character: Character
     api: ArtifactsClient
+    world: World
 
 
 class Task(ABC):
     """Base task interface"""
 
     @abstractmethod
-    def execute(self, context: TaskContext) -> "TaskResult":
+    async def execute(self, context: TaskContext) -> "TaskResult":
         """Execute one step of the task"""
         pass
 
@@ -41,6 +43,13 @@ class TaskResult:
     character: Optional[Character] = None
     error: Optional[str] = None
     log_messages: Optional[list[tuple[str, str]]] = None
+    paused: bool = False
+
+
+from tasks.gather import GatherTask
+
+
+__all__ = ["Task", "TaskContext", "TaskResult", "HelloTask", "GatherTask"]
 
 
 @dataclass
@@ -51,7 +60,7 @@ class HelloTask(Task):
     target_count: int
     current_count: int = 0
 
-    def execute(self, context: TaskContext) -> TaskResult:
+    async def execute(self, context: TaskContext) -> TaskResult:
         self.current_count += 1
 
         log_messages = [
@@ -67,9 +76,9 @@ class HelloTask(Task):
         if completed:
             log_messages.append(("Hello task completed successfully!", "INFO"))
 
-        import time
+        import asyncio
 
-        time.sleep(1)
+        await asyncio.sleep(1)
 
         return TaskResult(
             completed=completed, character=context.character, log_messages=log_messages

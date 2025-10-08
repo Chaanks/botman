@@ -826,7 +826,7 @@ class CraftRequirement(BaseModel):
 class ItemEffect(BaseModel):
     """Item effect"""
 
-    name: str
+    name: Optional[str] = None
     value: int
 
 
@@ -864,6 +864,13 @@ class MapContent(BaseModel):
     code: str
 
 
+class MapInteractions(BaseModel):
+    """Map interactions (includes content)"""
+
+    content: Optional[MapContent] = None
+    transition: Optional[dict] = None
+
+
 class Map(BaseModel):
     """Map details"""
 
@@ -872,8 +879,12 @@ class Map(BaseModel):
     x: int
     y: int
     layer: str
-    content: Optional[MapContent] = None
-    access_type: Optional[str] = None
+    interactions: Optional[MapInteractions] = None
+
+    @property
+    def content(self) -> Optional[MapContent]:
+        """Convenience property to access interactions.content"""
+        return self.interactions.content if self.interactions else None
 
 
 class MapPage(BaseModel):

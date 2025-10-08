@@ -1,5 +1,6 @@
 import time
 import threading
+import asyncio
 from queue import Empty
 import pykka
 
@@ -7,19 +8,27 @@ from api import ArtifactsClient
 from broker import MessageType, PubSub, BotUpdateMessage
 from models import Character
 from tasks import TaskContext
+from world import World
+from errors import CODE_CHARACTER_INVENTORY_FULL
 
 
 class Bot(pykka.ThreadingActor):
-    """I'm Botman."""
+    """I'm Botman"""
 
     def __init__(
-        self, name: str, pubsub: PubSub, character: Character, api: ArtifactsClient
+        self,
+        name: str,
+        pubsub: PubSub,
+        character: Character,
+        api: ArtifactsClient,
+        world: World,
     ):
         super().__init__()
         self.name = name
         self.pubsub = pubsub
         self.character = character
         self.api = api
+        self.world = world
         self.current_task = None
         self.task_queue = []
 
@@ -29,6 +38,7 @@ class Bot(pykka.ThreadingActor):
         # Execution loop
         self.running = False
         self.execution_thread = None
+        self.loop = None
 
     def on_start(self):
         self.running = True
@@ -44,6 +54,10 @@ class Bot(pykka.ThreadingActor):
             self.execution_thread.join(timeout=2)
 
     def _execution_loop(self):
+        # Create async event loop for this thread
+        self.loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(self.loop)
+
         while self.running:
             try:
                 # Check for messages
@@ -69,16 +83,14 @@ class Bot(pykka.ThreadingActor):
                 if self.current_task:
                     try:
                         # Create context for task execution
-                        context = TaskContext(character=self.character, api=self.api)
+                        context = TaskContext(
+                            character=self.character, api=self.api, world=self.world
+                        )
 
-                        result = self.current_task.execute(context)
-
-                        # Handle errors
-                        if result.error:
-                            self._log(f"Task error: {result.error}", level="ERROR")
-                            self.current_task = None
-                            self._publish_status()
-                            continue
+                        # Execute task asynchronously
+                        result = self.loop.run_until_complete(
+                            self.current_task.execute(context)
+                        )
 
                         # Process any log messages from the task
                         if result.log_messages:
@@ -89,11 +101,21 @@ class Bot(pykka.ThreadingActor):
                         if result.character:
                             self.character = result.character
 
-                        # Check completion
+                        # Handle task result
                         if result.completed:
                             self._log(
                                 f"Task completed: {self.current_task.description()}"
                             )
+                            self.current_task = None
+
+                        elif result.paused:
+                            # Autonomous recovery based on error code
+                            self._handle_paused_task(self.current_task, result)
+                            self.current_task = None
+
+                        elif result.error:
+                            # Task failed permanently
+                            self._log(f"Task failed: {result.error}", level="ERROR")
                             self.current_task = None
 
                         self._publish_status()
@@ -108,6 +130,43 @@ class Bot(pykka.ThreadingActor):
             except Exception as e:
                 self._log(f"Execution loop error: {e}", level="ERROR")
                 time.sleep(1)
+
+        # Cleanup loop
+        self.loop.close()
+
+    def _handle_paused_task(self, task, result):
+        """Handle paused task with autonomous recovery"""
+        error_code = self._extract_error_code(result.error)
+
+        if error_code == CODE_CHARACTER_INVENTORY_FULL:
+            # TODO: Import and use DepositAllTask when implemented
+            self._log(
+                "Inventory full - need to implement DepositAllTask for recovery",
+                level="WARNING",
+            )
+            # For now, just re-queue the task (will fail again)
+            # self.task_queue.insert(0, task)
+            # self.task_queue.insert(0, DepositAllTask())
+
+        else:
+            self._log(
+                f"Task paused with unknown error code {error_code}, cannot auto-recover",
+                level="WARNING",
+            )
+
+    def _extract_error_code(self, error_str):
+        """Extract error code from error string like '[497] Message'"""
+        if not error_str:
+            return None
+        try:
+            # Extract number between brackets
+            start = error_str.find("[")
+            end = error_str.find("]")
+            if start != -1 and end != -1:
+                return int(error_str[start + 1 : end])
+        except (ValueError, IndexError):
+            pass
+        return None
 
     def _handle_message(self, message):
         """Handle incoming messages"""
