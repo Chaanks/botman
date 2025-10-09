@@ -1,5 +1,6 @@
+import pickle
+from pathlib import Path
 from typing import Optional
-from collections import deque
 
 from api import ArtifactsClient
 from models import Item, Map, Monster, Resource, Skill
@@ -7,6 +8,8 @@ from models import Item, Map, Monster, Resource, Skill
 
 class World:
     """Game world data"""
+
+    CACHE_FILE = Path(".cache/world_data.pkl")
 
     def __init__(self):
         self.items: dict[str, Item] = {}
@@ -16,13 +19,56 @@ class World:
 
     @classmethod
     async def create(cls, api: ArtifactsClient) -> "World":
-        """Create and initialize world from API"""
         world = cls()
+
+        if world._load_from_cache():
+            print("✓ Loaded world data from cache")
+            return world
+
+        print("Fetching world data from API...")
         await world.initialize(api)
+        world._save_to_cache()
+        print("✓ World data fetched and cached")
+
         return world
 
+    def _load_from_cache(self) -> bool:
+        if not self.CACHE_FILE.exists():
+            return False
+
+        try:
+            with open(self.CACHE_FILE, "rb") as f:
+                cached_data = pickle.load(f)
+
+            self.items = cached_data["items"]
+            self.maps = cached_data["maps"]
+            self.monsters = cached_data["monsters"]
+            self.resources = cached_data["resources"]
+
+            return True
+
+        except Exception as e:
+            print(f"Failed to load cache: {e}")
+            return False
+
+    def _save_to_cache(self) -> None:
+        try:
+            self.CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
+
+            cache_data = {
+                "items": self.items,
+                "maps": self.maps,
+                "monsters": self.monsters,
+                "resources": self.resources,
+            }
+
+            with open(self.CACHE_FILE, "wb") as f:
+                pickle.dump(cache_data, f, protocol=pickle.HIGHEST_PROTOCOL)
+
+        except Exception as e:
+            print(f"Failed to save cache: {e}")
+
     async def initialize(self, api: ArtifactsClient) -> None:
-        """Fetch all game data from API"""
         items = await self._fetch_all_pages(api.get_items)
         monsters = await self._fetch_all_pages(api.get_monsters)
         resources = await self._fetch_all_pages(api.get_resources)
@@ -39,8 +85,7 @@ class World:
             if map_obj.content is not None:
                 self.maps[map_obj.content.code] = map_obj
 
-    async def _fetch_all_pages(self, fetch_func, page_size: int = 50):
-        """Fetch all pages from a paginated endpoint"""
+    async def _fetch_all_pages(self, fetch_func, page_size: int = 100):
         all_items = []
         page = 1
 
@@ -98,6 +143,8 @@ class World:
         return available[0] if available else None
 
     def recipe_graph(self, item_code: str) -> list[Item]:
+        from collections import deque
+
         graph: list[Item] = []
         queue = deque[str]()
 
@@ -130,15 +177,12 @@ class World:
         return graph
 
     def items_by_type(self, item_type: str) -> list[Item]:
-        """Get all items of a specific type"""
         return [item for item in self.items.values() if item.type == item_type]
 
     def is_resource(self, code: str) -> bool:
-        """Check if code is a resource node"""
         return code in self.resources
 
     def is_item(self, code: str) -> bool:
-        """Check if code is an item"""
         return code in self.items
 
     def __repr__(self) -> str:

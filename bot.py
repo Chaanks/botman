@@ -1,6 +1,8 @@
 import time
 import threading
 import asyncio
+import logging
+import traceback
 from queue import Empty
 import pykka
 
@@ -18,17 +20,17 @@ class Bot(pykka.ThreadingActor):
     def __init__(
         self,
         name: str,
+        token: str,
         pubsub: PubSub,
-        character: Character,
-        api: ArtifactsClient,
         world: World,
     ):
         super().__init__()
         self.name = name
+        self.token = token
         self.pubsub = pubsub
-        self.character = character
-        self.api = api
         self.world = world
+        self.character = None  # Will be fetched in execution loop
+        self.api = None  # Will be created in execution loop
         self.current_task = None
         self.task_queue = []
 
@@ -39,6 +41,9 @@ class Bot(pykka.ThreadingActor):
         self.running = False
         self.execution_thread = None
         self.loop = None
+
+        # File logger for detailed error tracking
+        self.logger = logging.getLogger(f"botman.bot.{name}")
 
     def on_start(self):
         self.running = True
@@ -57,6 +62,21 @@ class Bot(pykka.ThreadingActor):
         # Create async event loop for this thread
         self.loop = asyncio.new_event_loop()
         asyncio.set_event_loop(self.loop)
+
+        # Initialize API client and fetch character data in this thread's event loop
+        try:
+            self.api = ArtifactsClient(self.token)
+            self.character = self.loop.run_until_complete(
+                self.api.get_character(self.name)
+            )
+            self._log(f"Initialized (Lvl {self.character.level})")
+            self._publish_status()
+        except Exception as e:
+            error_msg = f"Failed to initialize: {e}"
+            self._log(error_msg, level="ERROR")
+            self.logger.error(f"Initialization error:\n{traceback.format_exc()}")
+            self.running = False
+            return
 
         while self.running:
             try:
@@ -121,15 +141,35 @@ class Bot(pykka.ThreadingActor):
                         self._publish_status()
 
                     except Exception as e:
-                        self._log(f"Task execution exception: {e}", level="ERROR")
+                        error_msg = f"Task execution exception: {e}"
+                        self._log(error_msg, level="ERROR")
+
+                        # Log full traceback to file
+                        self.logger.error(
+                            f"Task execution exception for task '{self.current_task.description()}':\n"
+                            f"{traceback.format_exc()}"
+                        )
+
                         self.current_task = None
                         self._publish_status()
 
                 time.sleep(0.01)
 
             except Exception as e:
-                self._log(f"Execution loop error: {e}", level="ERROR")
+                error_msg = f"Execution loop error: {e}"
+                self._log(error_msg, level="ERROR")
+
+                # Log full traceback to file
+                self.logger.error(f"Execution loop error:\n{traceback.format_exc()}")
+
                 time.sleep(1)
+
+        # Cleanup: Close API client connections before closing the event loop
+        try:
+            if self.api is not None:
+                self.loop.run_until_complete(self.api.close())
+        except Exception as e:
+            self.logger.error(f"Error closing API client: {e}")
 
         # Cleanup loop
         self.loop.close()

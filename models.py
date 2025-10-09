@@ -1,4 +1,4 @@
-from pydantic import BaseModel, computed_field, field_validator
+from pydantic import BaseModel, computed_field, field_validator, model_validator
 from typing import Optional, List, Dict, Any
 from datetime import datetime
 from enum import Enum
@@ -343,6 +343,17 @@ class ActionResult(BaseModel):
     cooldown: Cooldown
     character: Character
 
+    @model_validator(mode="before")
+    @classmethod
+    def transform_character(cls, data):
+        """Transform flat character data from API to nested Character object"""
+        if isinstance(data, dict) and "character" in data:
+            char_data = data["character"]
+            if isinstance(char_data, dict) and "position" not in char_data:
+                # Flat API response - transform it
+                data["character"] = Character.from_api_data(char_data)
+        return data
+
 
 class ItemDrop(BaseModel):
     """Item dropped from combat or gathering"""
@@ -409,17 +420,11 @@ class EquipResult(ActionResult):
     details: EquipmentChange
 
 
-class Movement(BaseModel):
-    """Character movement details"""
-
-    old_position: Position
-    new_position: Position
-
-
 class MoveResult(ActionResult):
     """Movement action outcome"""
 
-    destination: Movement
+    destination: "Map"  # Forward reference since Map is defined later
+    path: Optional[List[List[int]]] = None
 
 
 # ===== Bank =====

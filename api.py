@@ -1,7 +1,11 @@
 import httpx
+import asyncio
+import logging
 from typing import Optional
 from models import *
 from errors import ArtifactsError, error_from_response
+
+logger = logging.getLogger("botman.api")
 
 
 class ArtifactsClient:
@@ -21,7 +25,9 @@ class ArtifactsClient:
                     "Content-Type": "application/json",
                     "Accept": "application/json",
                 },
-                timeout=10.0,
+                timeout=httpx.Timeout(
+                    30.0, read=60.0
+                ),  # Longer timeout for slow API responses
             )
         return self._client
 
@@ -865,6 +871,7 @@ class ArtifactsClient:
     async def close(self) -> None:
         if self._client is not None:
             await self._client.aclose()
+            self._client = None
 
     async def __aenter__(self):
         return self
