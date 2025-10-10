@@ -1,4 +1,3 @@
-# Python-generated files
 __pycache__/
 *.py[oc]
 build/
@@ -8,14 +7,12 @@ wheels/
 .cache
 *.log
 logs/
-
-# Virtual environments
-.venv
-
-# Environment files (may contain secrets)
+.ruff_cache
+.claude
 .env
 .llm
 .sesskey
+.venv
 
 CLAUDE.md
 note.md
