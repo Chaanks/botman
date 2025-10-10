@@ -11,5 +11,10 @@ wheels/
 # Virtual environments
 .venv
 
+# Environment files (may contain secrets)
+.env
+.llm
+.sesskey
+
 CLAUDE.md
 note.md
