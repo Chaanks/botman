@@ -1,11 +1,8 @@
-"""HTML components for the FastHTML + HTMX dashboard using MonsterUI."""
-
 from fasthtml.common import *
 from monsterui.all import *
 
 
 def StatusLabel(status: str):
-    """Render a status label with appropriate styling."""
     label_type = {
         'Idle': LabelT.primary,
         'Ready': LabelT.primary,
@@ -13,12 +10,10 @@ def StatusLabel(status: str):
         'Cooldown': LabelT.destructive,
         'Error': LabelT.destructive
     }.get(status, LabelT.primary)
-
     return Label(status, cls=label_type)
 
 
 def BotCard(bot_name: str, bot_state: dict):
-    """Render a bot status card with live updates via SSE."""
     status = bot_state.get('status', 'Unknown')
     current_task = bot_state.get('current_task')
     progress = bot_state.get('progress', '0/0')
@@ -26,16 +21,9 @@ def BotCard(bot_name: str, bot_state: dict):
     character = bot_state.get('character')
     queue_size = bot_state.get('queue_size', 0)
 
-    # Character info
     char_info = f"Level {character.level} | HP: {character.stats.hp}/{character.stats.max_hp}" if character else "Loading..."
+    header = DivFullySpaced(H3(bot_name), StatusLabel(status))
 
-    # Card header with bot name and status
-    header = DivFullySpaced(
-        H3(bot_name),
-        StatusLabel(status)
-    )
-
-    # Card body content
     body_content = [
         P(char_info, cls=TextPresets.muted_sm),
         Divider(),
@@ -49,7 +37,6 @@ def BotCard(bot_name: str, bot_state: dict):
     if cooldown > 0:
         body_content.append(P(Strong("Cooldown: "), f"{cooldown}s"))
 
-    # Task form
     task_form = Form(
         DivHStacked(
             Select(
@@ -68,7 +55,6 @@ def BotCard(bot_name: str, bot_state: dict):
         cls="space-y-2"
     )
 
-    # Footer with control buttons
     footer = DivHStacked(
         Button(
             "Restart",
@@ -101,12 +87,10 @@ def BotCard(bot_name: str, bot_state: dict):
 
 
 def LogEntry(log: dict):
-    """Render a single log entry."""
     level = log.get('level', 'INFO')
     source = log.get('source', 'system')
     message = log.get('message', '')
 
-    # Map log levels to MonsterUI alert types
     alert_type = {
         'INFO': AlertT.info,
         'WARNING': AlertT.warning,
@@ -114,17 +98,11 @@ def LogEntry(log: dict):
         'DEBUG': AlertT.info
     }.get(level, AlertT.info)
 
-    return Alert(
-        Strong(f"[{source}] "),
-        message,
-        cls=alert_type + " mb-2"
-    )
+    return Alert(Strong(f"[{source}] "), message, cls=alert_type + " mb-2")
 
 
 def LogsSection(logs: list):
-    """Render the logs section with most recent 50 logs."""
     recent_logs = logs[-50:][::-1]
-
     return Card(
         H2("System Logs"),
         Divider(),
@@ -140,7 +118,6 @@ def LogsSection(logs: list):
 
 
 def DashboardPage(state: dict):
-    """Render the main dashboard page with live SSE updates."""
     bots = state.get('bots', {})
     logs = state.get('logs', [])
 

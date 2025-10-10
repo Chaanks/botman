@@ -1,14 +1,15 @@
 import pickle
+import logging
 from pathlib import Path
 from typing import Optional
 
-from api import ArtifactsClient
-from models import Item, Map, Monster, Resource, Skill
+from botman.core.api import ArtifactsClient
+from botman.core.models import Item, Map, Monster, Resource, Skill
+
+logger = logging.getLogger(__name__)
 
 
 class World:
-    """Game world data"""
-
     CACHE_FILE = Path(".cache/world_data.pkl")
 
     def __init__(self):
@@ -22,14 +23,13 @@ class World:
         world = cls()
 
         if world._load_from_cache():
-            print("✓ Loaded world data from cache")
+            logger.info("Loaded world data from cache")
             return world
 
-        print("Fetching world data from API...")
+        logger.info("Fetching world data from API...")
         await world.initialize(api)
         world._save_to_cache()
-        print("✓ World data fetched and cached")
-
+        logger.info("World data fetched and cached")
         return world
 
     def _load_from_cache(self) -> bool:
@@ -39,34 +39,28 @@ class World:
         try:
             with open(self.CACHE_FILE, "rb") as f:
                 cached_data = pickle.load(f)
-
             self.items = cached_data["items"]
             self.maps = cached_data["maps"]
             self.monsters = cached_data["monsters"]
             self.resources = cached_data["resources"]
-
             return True
-
         except Exception as e:
-            print(f"Failed to load cache: {e}")
+            logger.error(f"Failed to load cache: {e}")
             return False
 
     def _save_to_cache(self) -> None:
         try:
             self.CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
-
             cache_data = {
                 "items": self.items,
                 "maps": self.maps,
                 "monsters": self.monsters,
                 "resources": self.resources,
             }
-
             with open(self.CACHE_FILE, "wb") as f:
                 pickle.dump(cache_data, f, protocol=pickle.HIGHEST_PROTOCOL)
-
         except Exception as e:
-            print(f"Failed to save cache: {e}")
+            logger.error(f"Failed to save cache: {e}")
 
     async def initialize(self, api: ArtifactsClient) -> None:
         items = await self._fetch_all_pages(api.get_items)
@@ -77,9 +71,7 @@ class World:
         self.monsters = {monster.code: monster for monster in monsters}
         self.resources = {resource.code: resource for resource in resources}
 
-        # Fetch all maps and filter for those with content
         all_maps = await self._fetch_all_pages(api.get_maps)
-
         self.maps = {}
         for map_obj in all_maps:
             if map_obj.content is not None:

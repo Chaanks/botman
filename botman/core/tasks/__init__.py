@@ -2,43 +2,34 @@ from dataclasses import dataclass
 from typing import Optional
 from abc import ABC, abstractmethod
 
-from api import ArtifactsClient
-from models import Character
-from world import World
+from botman.core.api import ArtifactsClient
+from botman.core.models import Character
+from botman.core.world import World
 
 
 @dataclass
 class TaskContext:
-    """Context passed to tasks during execution"""
-
     character: Character
     api: ArtifactsClient
     world: World
 
 
 class Task(ABC):
-    """Base task interface"""
-
     @abstractmethod
     async def execute(self, context: TaskContext) -> "TaskResult":
-        """Execute one step of the task"""
         pass
 
     @abstractmethod
     def progress(self) -> str:
-        """Return progress string"""
         pass
 
     @abstractmethod
     def description(self) -> str:
-        """Return task description for UI"""
         pass
 
 
 @dataclass
 class TaskResult:
-    """Result from task execution"""
-
     completed: bool
     character: Optional[Character] = None
     error: Optional[str] = None
@@ -46,7 +37,7 @@ class TaskResult:
     paused: bool = False
 
 
-from tasks.gather import GatherTask
+from botman.core.tasks.gather import GatherTask
 
 
 __all__ = ["Task", "TaskContext", "TaskResult", "HelloTask", "GatherTask"]
@@ -54,8 +45,6 @@ __all__ = ["Task", "TaskContext", "TaskResult", "HelloTask", "GatherTask"]
 
 @dataclass
 class HelloTask(Task):
-    """Simple hello world task for testing"""
-
     message: str
     target_count: int
     current_count: int = 0

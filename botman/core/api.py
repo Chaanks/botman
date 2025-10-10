@@ -2,8 +2,8 @@ import httpx
 import asyncio
 import logging
 from typing import Optional
-from models import *
-from errors import ArtifactsError, error_from_response
+from botman.core.models import *
+from botman.core.errors import ArtifactsError, error_from_response
 
 logger = logging.getLogger("botman.api")
 
