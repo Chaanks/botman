@@ -1,17 +1,20 @@
 import asyncio
 import os
 import logging
+import tomllib
+from pathlib import Path
 from contextlib import asynccontextmanager
 from dotenv import load_dotenv
 from fasthtml.common import *
 from monsterui.all import *
 
 from botman.web.bridge import UIBridge
-from botman.core.bot import BotActor
+from botman.core.bot import Bot, BotRole
 from botman.core.api import ArtifactsClient
 from botman.core.world import World
-from botman.web.components import DashboardPage, BotCard, CharacterDetailPage
-from botman.core.tasks.gather import GatherTask
+from botman.core.models import Skill
+from botman.web.components import DashboardPage, BotCard, CharacterDetailPage, TaskFormFields
+from botman.core.tasks.registry import TaskFactory
 
 
 def setup_logging(log_file="logs/botman.log"):
@@ -27,6 +30,8 @@ def setup_logging(log_file="logs/botman.log"):
             logging.StreamHandler(),
         ],
     )
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
+
     return logging.getLogger("botman")
 
 
@@ -35,13 +40,27 @@ async def lifespan(app):
     load_dotenv()
     logger = setup_logging()
 
+    # Load API token from .env
     token = os.getenv("ARTIFACTS_TOKEN")
     if not token:
         logger.error("ARTIFACTS_TOKEN not found in .env file")
         raise ValueError("ARTIFACTS_TOKEN not found in .env file")
 
-    character_names = os.getenv("CHARACTER_NAMES", "AAA,BBB,CCC,DDD,EEE").split(",")
-    logger.info(f"Starting Bot Manager with {len(character_names)} characters")
+    # Load bot configuration from config.toml
+    config_path = Path(__file__).parent.parent.parent / "config.toml"
+    if not config_path.exists():
+        logger.error(f"config.toml not found at {config_path}")
+        raise ValueError(f"config.toml not found at {config_path}")
+
+    with open(config_path, "rb") as f:
+        config = tomllib.load(f)
+
+    bot_configs = config.get("bots", [])
+    if not bot_configs:
+        logger.error("No bots configured in config.toml")
+        raise ValueError("No bots configured in config.toml")
+
+    logger.info(f"Starting Bot Manager with {len(bot_configs)} characters")
 
     ui_bridge = UIBridge()
     await ui_bridge.start()
@@ -54,12 +73,17 @@ async def lifespan(app):
     )
 
     bots = {}
-    for name in character_names:
+    for bot_config in bot_configs:
+        name = bot_config["name"]
+        role = BotRole(bot_config["role"])
+        skills = [Skill(skill) for skill in bot_config.get("skills", [])]
+
         try:
-            bot = BotActor(name, token, ui_bridge, world)
+            bot = Bot(name, token, ui_bridge, world, role, skills)
             await bot.start()
             bots[name] = bot
-            logger.info(f"Started bot: {name}")
+            skills_str = ", ".join([s.value for s in skills]) if skills else "none"
+            logger.info(f"Started bot: {name} (role: {role.value}, skills: {skills_str})")
         except Exception as e:
             logger.error(f"Failed to start bot {name}: {e}")
 
@@ -79,10 +103,7 @@ async def lifespan(app):
 
 
 app, rt = fast_app(
-    hdrs=(
-        *Theme.rose.headers(mode='dark'),
-        Script(src="https://unpkg.com/htmx-ext-sse@2.2.3/sse.js"),
-    ),
+    hdrs=(*Theme.rose.headers(mode='dark'), Script(src="https://unpkg.com/htmx-ext-sse@2.2.3/sse.js")),
     lifespan=lifespan
 )
 
@@ -97,19 +118,12 @@ async def index(app, req):
         return page_content
 
     # Full page load: wrap with SSE connection
-    return Html(
-        Head(
-            Title("Botman"),
-            *Theme.rose.headers(mode='dark'),
-            Script(src="https://unpkg.com/htmx-ext-sse@2.2.3/sse.js"),
-        ),
-        Body(
-            page_content,
-            hx_ext="sse",
-            sse_connect="/events",
-            id="app-body",
-            cls="bg-gray-600"
-        )
+    return Title("Botman"), Body(
+        page_content,
+        hx_ext="sse",
+        sse_connect="/events",
+        id="app-body",
+        cls="bg-gray-600"
     )
 
 
@@ -140,17 +154,12 @@ async def events(app):
                     if bot_state.get('character'):
                         character = bot_state['character']
                         map_tile = app.state.world.map_for_character(character)
-                        # Debug logging
-                        app.state.logger.info(
-                            f"[{bot_name}] Layer: {character.layer}, Position: ({character.position.x}, {character.position.y}) | "
-                            f"Map: {map_tile.name if map_tile else 'None'} | "
-                            f"Skin: {map_tile.skin if map_tile else 'None'} | "
-                            f"Content: {map_tile.content if map_tile else 'None'}"
-                        )
+                    app.state.logger.debug(f"SSE: Sending bot_changed_{bot_name} event")
                     yield sse_message(BotCard(bot_name, bot_state, map_tile), event=f"bot_changed_{bot_name}")
 
                 elif event_type == 'log':
                     from botman.web.components import LogEntry
+                    app.state.logger.debug(f"SSE: Sending log event from {data.get('source', 'unknown')}")
                     yield sse_message(LogEntry(data), event="log")
 
         finally:
@@ -164,28 +173,99 @@ async def events(app):
     return EventStream(event_generator())
 
 
-@rt
-async def bot_task(app, bot_name: str, task_type: str, task_params: str):
-    if bot_name not in app.state.bots:
+@rt("/bot_task")
+async def post(app, req):
+    """Handle task creation from web UI"""
+    # Get form data
+    form_data = await req.form()
+    form_dict = dict(form_data)
+
+    bot_name = form_dict.get("bot_name")
+    task_type = form_dict.get("task_type")
+
+    app.state.logger.info(f"bot_task called: bot={bot_name}, type={task_type}, params={form_dict}")
+
+    if not bot_name or bot_name not in app.state.bots:
+        app.state.logger.error(f"Bot {bot_name} not found")
         return ""
 
     bot = app.state.bots[bot_name]
 
     try:
-        if task_type == "gather":
-            parts = task_params.split()
-            if len(parts) < 2:
-                return ""
+        # Extract task parameters (exclude bot_name and task_type)
+        task_params = {k: v for k, v in form_dict.items() if k not in ("bot_name", "task_type")}
 
-            resource_code, target_amount = parts[0], int(parts[1])
-            task = GatherTask(resource_code=resource_code, target_amount=target_amount)
-            await bot.tell({'type': 'task_create', 'task': task})
+        # Special handling for deposit mode
+        if task_type == "deposit":
+            deposit_mode = task_params.pop("deposit_mode", "single")
+            if deposit_mode == "all":
+                task_params = {"deposit_all": True}
+            # else keep item_code and quantity
+
+        # Special handling for recycle checkbox
+        if task_type == "craft" and "recycle" in task_params:
+            task_params["recycle"] = task_params["recycle"] == "true"
+
+        # Create task using factory
+        task = TaskFactory.create_task(task_type, task_params)
+
+        if not task:
+            app.state.logger.error(f"Unknown task type: {task_type}")
             return ""
-        else:
-            return ""
-    except Exception as e:
-        app.state.logger.error(f"Error adding task: {e}")
+
+        app.state.logger.info(f"Creating {task_type} task for {bot_name}: {task.description()}")
+        await bot.tell({'type': 'task_create', 'task': task})
+        app.state.logger.info(f"Task queued successfully for {bot_name}")
         return ""
+
+    except ValueError as e:
+        app.state.logger.error(f"Invalid task parameters: {e}")
+        return ""
+    except Exception as e:
+        app.state.logger.error(f"Error adding task: {e}", exc_info=True)
+        return ""
+
+
+@rt("/task_form_fields")
+async def task_form_fields(app, task_type: str, bot_name: str):
+    """Return dynamic form fields based on task type"""
+    return TaskFormFields(task_type, bot_name)
+
+
+@rt("/deposit_mode_fields")
+async def deposit_mode_fields(app, deposit_mode: str, bot_name: str):
+    """Return dynamic fields for deposit mode"""
+    if deposit_mode == "all":
+        return Div(
+            P("All items in inventory will be deposited", cls="text-sm text-gray-400 italic"),
+            cls="mt-4"
+        )
+    else:
+        return Div(
+            Div(
+                Label("Item Code", cls="text-sm text-gray-400 mb-1 block"),
+                Input(
+                    type="text",
+                    name="item_code",
+                    placeholder="e.g., copper_ore, ash_wood",
+                    required=True,
+                    cls="w-full bg-gray-700 text-white border border-gray-600 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                ),
+            ),
+            Div(
+                Label("Quantity", cls="text-sm text-gray-400 mb-1 block"),
+                Input(
+                    type="number",
+                    name="quantity",
+                    placeholder="10",
+                    value="10",
+                    min="1",
+                    required=True,
+                    cls="w-full bg-gray-700 text-white border border-gray-600 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                ),
+            ),
+            cls="space-y-4"
+        )
 
 
 @rt
@@ -224,17 +304,10 @@ async def character(app, req, bot_name: str):
         return page_content
 
     # Full page load: wrap with SSE connection
-    return Html(
-        Head(
-            Title(f"{bot_name} - Bot Manager"),
-            *Theme.rose.headers(mode='dark'),
-            Script(src="https://unpkg.com/htmx-ext-sse@2.2.3/sse.js"),
-        ),
-        Body(
-            page_content,
-            hx_ext="sse",
-            sse_connect="/events",
-            id="app-body",
-            cls="bg-gray-600"
-        )
+    return Title(f"{bot_name} - Bot Manager"), Body(
+        page_content,
+        hx_ext="sse",
+        sse_connect="/events",
+        id="app-body",
+        cls="bg-gray-600"
     )

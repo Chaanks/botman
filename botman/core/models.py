@@ -506,9 +506,29 @@ class BankItem(BaseModel):
 
 
 class BankResult(ActionResult):
-    """Bank transaction outcome"""
+    """Bank transaction outcome for gold transactions"""
 
     bank: Bank
+
+
+class BankItemTransaction(BaseModel):
+    """Bank item deposit/withdraw transaction outcome"""
+
+    cooldown: Cooldown
+    items: List[ItemDrop]  # Items deposited/withdrawn
+    bank: List[BankItem]  # Full bank inventory after transaction
+    character: Character
+
+    @model_validator(mode="before")
+    @classmethod
+    def transform_character(cls, data):
+        """Transform flat character data from API to nested Character object"""
+        if isinstance(data, dict) and "character" in data:
+            char_data = data["character"]
+            if isinstance(char_data, dict) and "position" not in char_data:
+                # Flat API response - transform it
+                data["character"] = Character.from_api_data(char_data)
+        return data
 
 
 # ===== Trade =====
@@ -900,6 +920,36 @@ class CraftRequirement(BaseModel):
     quantity: int
 
 
+class CraftInfo(BaseModel):
+    """Crafting recipe information"""
+
+    skill: Optional[str] = None
+    level: Optional[int] = None
+    requirements: List[CraftRequirement] = []
+    quantity: int = 1  # How many items this recipe produces
+
+    @classmethod
+    def from_dict(cls, data: Optional[dict]) -> Optional["CraftInfo"]:
+        """Create CraftInfo from API dict format"""
+        if not data:
+            return None
+
+        requirements = []
+        if "items" in data:
+            for item_data in data["items"]:
+                requirements.append(CraftRequirement(
+                    code=item_data["code"],
+                    quantity=item_data["quantity"]
+                ))
+
+        return cls(
+            skill=data.get("skill"),
+            level=data.get("level"),
+            requirements=requirements,
+            quantity=data.get("quantity", 1)
+        )
+
+
 class ItemEffect(BaseModel):
     """Item effect"""
 
@@ -917,8 +967,17 @@ class Item(BaseModel):
     subtype: Optional[str] = None
     description: Optional[str] = None
     effects: List[ItemEffect] = []
-    craft: Optional[dict] = None
+    craft: Optional[CraftInfo] = None
     tradeable: bool = True
+
+    @model_validator(mode="before")
+    @classmethod
+    def transform_craft(cls, data):
+        """Transform craft dict to CraftInfo"""
+        if isinstance(data, dict) and "craft" in data:
+            if isinstance(data["craft"], dict):
+                data["craft"] = CraftInfo.from_dict(data["craft"])
+        return data
 
 
 class ItemPage(BaseModel):

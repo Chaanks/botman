@@ -80,27 +80,9 @@ class World:
         self.maps = {}
         self.maps_by_pos = {}
         for i, map_obj in enumerate(all_maps):
-            # Debug log first few maps
-            if i < 10:
-                logger.info(f"*** Map {i}: layer={map_obj.layer} ({map_obj.x}, {map_obj.y}) = {map_obj.name}, skin={map_obj.skin}, content={map_obj.content}")
-
-            # Index all maps by (layer, x, y)
             self.maps_by_pos[(map_obj.layer, map_obj.x, map_obj.y)] = map_obj
-
-            # Also index by content code if available (content is unique across all layers)
             if map_obj.content is not None:
                 self.maps[map_obj.content.code] = map_obj
-
-        logger.info(f"*** Indexed {len(self.maps_by_pos)} maps by (layer,x,y), {len(self.maps)} by content ***")
-
-        # Check specific positions on overworld
-        test_pos = [(2, 0), (4, 2), (6, 1), (0, 0)]
-        for x, y in test_pos:
-            tile = self.maps_by_pos.get(("overworld", x, y))
-            if tile:
-                logger.info(f"*** Test position overworld ({x}, {y}): {tile.name}, skin={tile.skin}")
-            else:
-                logger.warning(f"*** Test position overworld ({x}, {y}): NOT FOUND")
 
     async def _fetch_all_pages(self, fetch_func, page_size: int = 100):
         all_items = []
@@ -139,26 +121,10 @@ class World:
         return self.map_by_content(skill.value)
 
     def map_by_position(self, layer: str, x: int, y: int) -> Optional[Map]:
-        """Get map tile at specific layer and position
-
-        Args:
-            layer: Map layer ("overworld", "underground", "interior")
-            x: X coordinate
-            y: Y coordinate
-        """
         result = self.maps_by_pos.get((layer, x, y))
-        if result:
-            logger.debug(f"map_by_position({layer}, {x}, {y}) -> {result.name} (skin={result.skin})")
-        else:
-            logger.warning(f"map_by_position({layer}, {x}, {y}) -> NOT FOUND")
         return result
 
     def map_for_character(self, character) -> Optional[Map]:
-        """Get map tile for a character's current location
-
-        Args:
-            character: Character object with layer, position.x, position.y
-        """
         return self.map_by_position(character.layer, character.position.x, character.position.y)
 
     def gathering_location(self, resource_code: str) -> Optional[tuple[int, int]]:
@@ -194,9 +160,9 @@ class World:
 
         graph.append(target_item)
 
-        if target_item.craft and "items" in target_item.craft:
-            for mat in target_item.craft["items"]:
-                queue.append(mat["code"])
+        if target_item.craft:
+            for requirement in target_item.craft.requirements:
+                queue.append(requirement.code)
 
         while queue:
             material_code = queue.popleft()
@@ -210,9 +176,9 @@ class World:
 
             graph.append(material)
 
-            if material.craft and "items" in material.craft:
-                for mat in material.craft["items"]:
-                    queue.append(mat["code"])
+            if material.craft:
+                for requirement in material.craft.requirements:
+                    queue.append(requirement.code)
 
         return graph
 
@@ -224,6 +190,23 @@ class World:
 
     def is_item(self, code: str) -> bool:
         return code in self.items
+
+    def recipes_using_item(self, item_code: str) -> list[Item]:
+        """Find all items that can be crafted using the given item as a material"""
+        recipes = []
+        for item in self.items.values():
+            if item.craft:
+                for requirement in item.craft.requirements:
+                    if requirement.code == item_code:
+                        recipes.append(item)
+                        break
+        return recipes
+
+    def single_recipe_from_gather(self, item_code: str) -> Optional[Item]:
+        recipes = self.recipes_using_item(item_code)
+        if len(recipes) == 1:
+            return recipes[0]
+        return None
 
     def __repr__(self) -> str:
         return (

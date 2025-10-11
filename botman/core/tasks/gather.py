@@ -32,7 +32,7 @@ class GatherTask(Task):
         # Step 1: Move to the resource
         if (current_pos.x, current_pos.y) != (target_x, target_y):
             try:
-                result = await context.api.move(target_x, target_y, name)
+                result = await context.api.move(x=target_x, y=target_y, name=name)
                 return TaskResult(
                     completed=False,
                     character=result.character,

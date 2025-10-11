@@ -1,0 +1,26 @@
+# Botman Configuration
+
+[[bots]]
+name = "AAA"
+role = "fighter"
+skills = []
+
+[[bots]]
+name = "BBB"
+role = "gatherer"
+skills = ["mining", "woodcutting"]
+
+[[bots]]
+name = "CCC"
+role = "crafter"
+skills = ["weaponcrafting", "gearcrafting", "jewelrycrafting", "woodcutting"]
+
+[[bots]]
+name = "DDD"
+role = "support"
+skills = ["fishing", "cooking", "alchemy"]
+
+[[bots]]
+name = "EEE"
+role = "gatherer"
+skills = ["mining", "woodcutting"]

@@ -1,4 +1,5 @@
 import asyncio
+from enum import Enum
 import logging
 import traceback
 import time
@@ -6,8 +7,8 @@ from typing import Optional, Dict, Any
 
 from botman.core.actor import Actor
 from botman.core.api import ArtifactsClient
-from botman.core.models import Character
-from botman.core.tasks import Task, TaskContext
+from botman.core.models import Character, Skill
+from botman.core.tasks import Task, TaskContext, DepositTask
 from botman.core.world import World
 from botman.core.errors import (
     FatalError,
@@ -18,20 +19,30 @@ from botman.core.errors import (
     CODE_BANK_FULL
 )
 
+class BotRole(str, Enum):
+    GATHERER = "gatherer"
+    FIGHTER = "fighter"
+    CRAFTER = "crafter"
+    SUPPORT = "support"
 
-class BotActor(Actor):
-    def __init__(self, name: str, token: str, ui: Actor, world: World):
+class Bot(Actor):
+    def __init__(self, name: str, token: str, ui: Actor, world: World, role: BotRole, skills: list[Skill]):
         super().__init__()
         self.name = name
         self.token = token
         self.ui = ui
         self.world = world
-        self.character: Optional[Character] = None
+        self.role: BotRole = role
+        self.skills: list[Skill] = skills
         self.api: Optional[ArtifactsClient] = None
+        self.character: Optional[Character] = None
+
         self.current_task: Optional[Task] = None
         self.task_queue: list[Task] = []
         self.execution_task: Optional[asyncio.Task] = None
+
         self.logger = logging.getLogger(f"botman.bot.{name}")
+        self._last_published_state: Optional[Dict[str, Any]] = None
 
     async def on_start(self):
         self.logger.info(f"Bot {self.name} starting...")
@@ -39,7 +50,7 @@ class BotActor(Actor):
         try:
             self.character = await self.api.get_character(self.name)
             await self._log(f"Initialized (Lvl {self.character.level})")
-            await self._publish_status()
+            await self._publish_status(force=True)
             self.execution_task = asyncio.create_task(self._execution_loop())
         except APIError as e:
             await self._log(f"Fatal error during initialization: {e}", level="CRITICAL")
@@ -145,17 +156,52 @@ class BotActor(Actor):
 
     async def _handle_recovery(self, paused_task: Task, error: RecoverableError):
         """Handles a recoverable error by queueing a corrective task."""
-        self.task_queue.insert(0, paused_task)
-        await self._log(f"Re-queued task '{paused_task.description()}' to run after recovery.")
-
-        # This is where you would create and queue a specific recovery task.
-        # For example, if a `DepositAllTask` exists:
-        # recovery_task = DepositAllTask()
-        # self.task_queue.insert(0, recovery_task)
-        # await self._log(f"Queued recovery task: {recovery_task.description()}")
+        from botman.core.tasks.craft import CraftTask
 
         if error.code == CODE_CHARACTER_INVENTORY_FULL:
-            await self._log("Inventory full. A recovery task (e.g., DepositAllTask) should be queued here.", "WARNING")
+            craft_tasks = []
+
+            for inv_item in self.character.inventory:
+                # Check if the item has a single recipe
+                recipe_item = self.world.single_recipe_from_gather(inv_item.code)
+
+                if recipe_item:
+                    # Calculate how many we can craft
+                    material_qty_needed = 1
+                    if recipe_item.craft:
+                        for requirement in recipe_item.craft.requirements:
+                            if requirement.code == inv_item.code:
+                                material_qty_needed = requirement.quantity
+                                break
+
+                    max_crafts = inv_item.quantity // material_qty_needed
+                    if max_crafts > 0:
+                        craft_tasks.append((
+                            CraftTask(item_code=recipe_item.code, target_amount=max_crafts),
+                            inv_item.code,
+                            inv_item.quantity,
+                            recipe_item.code,
+                            max_crafts
+                        ))
+
+            self.task_queue.insert(0, paused_task)
+
+            deposit_task = DepositTask(deposit_all=True)
+            self.task_queue.insert(0, deposit_task)
+
+            if craft_tasks:
+                craft_descriptions = []
+                for craft_task, material_code, material_qty, craft_item, max_crafts in reversed(craft_tasks):
+                    self.task_queue.insert(0, craft_task)
+                    craft_descriptions.append(f"{material_code} x{material_qty} → {craft_item} x{max_crafts}")
+
+                await self._log(
+                    f"Inventory full: will craft {', '.join(craft_descriptions)}, then deposit and resume",
+                    "INFO"
+                )
+            else:
+                await self._log(f"Inventory full: will deposit and resume", "INFO")
+
         elif error.code == CODE_BANK_FULL:
             await self._log(f"Bank is full. No recovery task defined.", "ERROR")
         else:
@@ -171,7 +217,7 @@ class BotActor(Actor):
         else:
             return "Idle"
 
-    async def _publish_status(self):
+    async def _publish_status(self, force: bool = False):
         bot_data = {
             'status': self._get_status(),
             'current_task': self.current_task.description() if self.current_task else None,
@@ -180,9 +226,16 @@ class BotActor(Actor):
             'character': self.character,
             'queue_size': len(self.task_queue),
         }
-        await self.ui.tell({'type': 'bot_changed', 'bot_name': self.name, 'data': bot_data})
+
+        # Only publish if state changed (excluding character object which always differs)
+        state_key = (bot_data['status'], bot_data['current_task'], bot_data['progress'], bot_data['queue_size'])
+
+        if force or self._last_published_state != state_key:
+            self._last_published_state = state_key
+            await self.ui.tell({'type': 'bot_changed', 'bot_name': self.name, 'data': bot_data})
 
     async def _log(self, message: str, level: str = "INFO"):
+        # Send to UI
         await self.ui.tell({
             'type': 'log',
             'level': level,
@@ -190,3 +243,7 @@ class BotActor(Actor):
             'message': message,
             'timestamp': time.time(),
         })
+
+        # Also log to file
+        log_func = getattr(self.logger, level.lower(), self.logger.info)
+        log_func(f"[{self.name}] {message}")

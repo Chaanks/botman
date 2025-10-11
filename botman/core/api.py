@@ -249,12 +249,12 @@ class ArtifactsClient:
         )
         return BankResult.model_validate(data)
 
-    async def deposit_item(self, items: List[dict], name: str = None) -> BankResult:
+    async def deposit_item(self, items: List[dict], name: str = None) -> BankItemTransaction:
         """Deposit items in bank. items = [{"code": "item_code", "quantity": 1}, ...]"""
         data = await self._request(
             "POST", f"/my/{name}/action/bank/deposit/item", items
         )
-        return BankResult.model_validate(data)
+        return BankItemTransaction.model_validate(data)
 
     async def withdraw_gold(self, quantity: int, name: str = None) -> BankResult:
         """Withdraw gold from bank"""
@@ -263,12 +263,12 @@ class ArtifactsClient:
         )
         return BankResult.model_validate(data)
 
-    async def withdraw_item(self, items: List[dict], name: str = None) -> BankResult:
+    async def withdraw_item(self, items: List[dict], name: str = None) -> BankItemTransaction:
         """Withdraw items from bank. items = [{"code": "item_code", "quantity": 1}, ...]"""
         data = await self._request(
             "POST", f"/my/{name}/action/bank/withdraw/item", items
         )
-        return BankResult.model_validate(data)
+        return BankItemTransaction.model_validate(data)
 
     async def buy_bank_expansion(self, name: str = None) -> BankResult:
         """Buy a 20 slots bank expansion"""

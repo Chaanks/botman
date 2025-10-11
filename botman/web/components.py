@@ -2,6 +2,128 @@ from fasthtml.common import *
 from monsterui.all import *
 
 
+def TaskFormFields(task_type: str, bot_name: str):
+    """Generate dynamic form fields based on task type."""
+
+    if task_type == "gather":
+        return Div(
+            Div(
+                Label("Resource Code", cls="text-sm text-gray-400 mb-1 block"),
+                Input(
+                    type="text",
+                    name="resource_code",
+                    placeholder="e.g., copper_rocks, ash_tree",
+                    required=True,
+                    cls="w-full bg-gray-700 text-white border border-gray-600 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                ),
+                P("The code of the resource to gather", cls="text-xs text-gray-500 mt-1")
+            ),
+            Div(
+                Label("Target Amount", cls="text-sm text-gray-400 mb-1 block"),
+                Input(
+                    type="number",
+                    name="target_amount",
+                    placeholder="10",
+                    value="10",
+                    min="1",
+                    required=True,
+                    cls="w-full bg-gray-700 text-white border border-gray-600 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                ),
+                P("How many resources to gather", cls="text-xs text-gray-500 mt-1")
+            ),
+            cls="space-y-4"
+        )
+
+    elif task_type == "deposit":
+        return Div(
+            Div(
+                Label("Deposit Mode", cls="text-sm text-gray-400 mb-1 block"),
+                Select(
+                    Option("Single Item", value="single"),
+                    Option("All Inventory", value="all"),
+                    name="deposit_mode",
+                    id="deposit_mode",
+                    cls="w-full bg-gray-700 text-white border border-gray-600 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500",
+                    hx_get=f"/deposit_mode_fields?bot_name={bot_name}",
+                    hx_target="#deposit-fields",
+                    hx_swap="innerHTML",
+                    hx_trigger="change"
+                ),
+                P("Choose what to deposit", cls="text-xs text-gray-500 mt-1")
+            ),
+            Div(
+                # Single item fields by default
+                Div(
+                    Label("Item Code", cls="text-sm text-gray-400 mb-1 block"),
+                    Input(
+                        type="text",
+                        name="item_code",
+                        placeholder="e.g., copper_ore, ash_wood",
+                        cls="w-full bg-gray-700 text-white border border-gray-600 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    ),
+                ),
+                Div(
+                    Label("Quantity", cls="text-sm text-gray-400 mb-1 block"),
+                    Input(
+                        type="number",
+                        name="quantity",
+                        placeholder="10",
+                        value="10",
+                        min="1",
+                        cls="w-full bg-gray-700 text-white border border-gray-600 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    ),
+                ),
+                id="deposit-fields",
+                cls="space-y-4 mt-4"
+            ),
+            cls="space-y-4"
+        )
+
+    elif task_type == "craft":
+        return Div(
+            Div(
+                Label("Item Code", cls="text-sm text-gray-400 mb-1 block"),
+                Input(
+                    type="text",
+                    name="item_code",
+                    placeholder="e.g., copper_dagger, wooden_staff",
+                    required=True,
+                    cls="w-full bg-gray-700 text-white border border-gray-600 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                ),
+                P("The code of the item to craft", cls="text-xs text-gray-500 mt-1")
+            ),
+            Div(
+                Label("Target Amount", cls="text-sm text-gray-400 mb-1 block"),
+                Input(
+                    type="number",
+                    name="target_amount",
+                    placeholder="10",
+                    value="1",
+                    min="1",
+                    required=True,
+                    cls="w-full bg-gray-700 text-white border border-gray-600 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                ),
+                P("How many items to craft", cls="text-xs text-gray-500 mt-1")
+            ),
+            Div(
+                Label(
+                    Input(
+                        type="checkbox",
+                        name="recycle",
+                        value="true",
+                        cls="mr-2"
+                    ),
+                    "Recycle after crafting",
+                    cls="text-sm text-gray-400 flex items-center cursor-pointer"
+                ),
+                P("Automatically recycle crafted items for materials", cls="text-xs text-gray-500 mt-1 ml-6")
+            ),
+            cls="space-y-4"
+        )
+
+    return Div(P("Select a task type", cls="text-sm text-gray-400"))
+
+
 def StatusBadge(status: str):
     """Compact status badge using FrankenUI Label"""
     label_type = {
@@ -152,14 +274,19 @@ def BotCard(bot_name: str, bot_state: dict, map_tile=None):
 
                 # Stats Grid
                 Grid(
-                    # Cooldown
+                    # Cooldown with client-side countdown
                     Div(
                         Div(
                             UkIcon("timer", height=16, cls="text-blue-400"),
                             Span("Cooldown", cls="text-sm text-gray-400"),
                             cls="flex items-center gap-2"
                         ),
-                        Div(cooldown_text, cls="text-white mt-1"),
+                        Div(
+                            cooldown_text,
+                            cls="text-white mt-1",
+                            id=f"cooldown-{bot_name}",
+                            data_cooldown=str(cooldown)
+                        ),
                         cls="flex flex-col justify-center"
                     ),
 
@@ -303,10 +430,6 @@ def DashboardPage(state: dict, world=None):
         if world and bot_state.get("character"):
             character = bot_state["character"]
             map_tile = world.map_for_character(character)
-            print(f"[DEBUG {name}] Layer: {character.layer}, Position: ({character.position.x}, {character.position.y}) | "
-                  f"Map: {map_tile.name if map_tile else 'None'} | "
-                  f"Skin: {map_tile.skin if map_tile else 'None'} | "
-                  f"Content: {map_tile.content if map_tile else 'None'}")
         bot_cards.append(BotCard(name, bot_state, map_tile))
 
     return Container(
@@ -321,6 +444,32 @@ def DashboardPage(state: dict, world=None):
 
         # Logs section
         LogsSection(logs),
+
+        # Client-side cooldown countdown script
+        Script("""
+        (function() {
+            function updateCooldowns() {
+                document.querySelectorAll('[data-cooldown]').forEach(el => {
+                    let cooldown = parseInt(el.dataset.cooldown);
+                    if (cooldown > 0) {
+                        cooldown--;
+                        el.dataset.cooldown = cooldown;
+                        el.textContent = cooldown > 0 ? cooldown + 's' : 'Ready';
+                    }
+                });
+            }
+
+            // Update every second
+            setInterval(updateCooldowns, 1000);
+
+            // Also update when SSE swaps occur (HTMX reinitializes elements)
+            document.body.addEventListener('htmx:afterSwap', function(evt) {
+                if (evt.detail.target.id && evt.detail.target.id.startsWith('bot-')) {
+                    // New bot card swapped in, cooldown will be in data attribute
+                }
+            });
+        })();
+        """),
 
         cls=ContainerT.xl,
         id="main-content"
@@ -380,7 +529,7 @@ def CharacterDetailPage(bot_name: str, bot_state: dict):
     if not character:
         return Container(
             H2("Character Not Found", cls="text-white"),
-            A("← Back to Dashboard", href="/", cls="text-blue-400 hover:text-blue-300"),
+            A("← Back to Dashboard", href="/", hx_get="/", hx_target="#main-content", hx_swap="outerHTML", cls="text-blue-400 hover:text-blue-300"),
         )
 
     # Task display
@@ -503,33 +652,32 @@ def CharacterDetailPage(bot_name: str, bot_state: dict):
                         Div(
                             Label("Task Type", cls="text-sm text-gray-400 mb-1 block"),
                             Select(
-                                Option("Gather", value="gather"),
-                                Option("Bank", value="bank"),
-                                Option("Fight", value="fight"),
+                                Option("Gather Resource", value="gather"),
+                                Option("Deposit Items", value="deposit"),
+                                Option("Craft Items", value="craft"),
                                 name="task_type",
                                 id="task_type",
-                                cls="w-full bg-gray-700 text-white border border-gray-600 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                cls="w-full bg-gray-700 text-white border border-gray-600 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500",
+                                hx_get=f"/task_form_fields?bot_name={bot_name}",
+                                hx_target="#task-params-container",
+                                hx_swap="innerHTML",
+                                hx_trigger="change"
                             ),
                         ),
                         Div(
-                            Label("Parameters", cls="text-sm text-gray-400 mb-1 block"),
-                            Input(
-                                type="text",
-                                name="task_params",
-                                placeholder="e.g., copper 10",
-                                id="task_params",
-                                cls="w-full bg-gray-700 text-white border border-gray-600 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                            ),
+                            # Dynamic fields will be loaded here based on task type
+                            TaskFormFields("gather", bot_name),
+                            id="task-params-container",
+                            cls="space-y-4"
                         ),
                         Button(
                             "Add Task",
                             type="submit",
-                            cls="w-full bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 px-4 rounded-md transition-colors"
+                            cls="w-full bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 px-4 rounded-md transition-colors mt-4"
                         ),
                         Input(type="hidden", name="bot_name", value=bot_name),
                         hx_post="/bot_task",
                         hx_swap="none",
-                        hx_on="htmx:afterRequest: if(event.detail.successful) this.reset()",
                         cls="space-y-4"
                     ),
                     cls="bg-gray-800/90 rounded-lg p-6 mt-4"
