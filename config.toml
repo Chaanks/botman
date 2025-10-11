@@ -12,13 +12,13 @@ skills = ["mining", "woodcutting"]
 
 [[bots]]
 name = "CCC"
-role = "crafter"
-skills = ["weaponcrafting", "gearcrafting", "jewelrycrafting", "woodcutting"]
+role = "support"
+skills = ["fishing", "cooking", "alchemy"]
 
 [[bots]]
 name = "DDD"
-role = "support"
-skills = ["fishing", "cooking", "alchemy"]
+role = "crafter"
+skills = ["weaponcrafting", "gearcrafting", "jewelrycrafting", "woodcutting"]
 
 [[bots]]
 name = "EEE"

@@ -497,6 +497,10 @@ class Bank(BaseModel):
     next_expansion_cost: int
     gold: int
 
+    def available_slots(self, used_slots: int) -> int:
+        """Calculate available bank slots"""
+        return self.slots - used_slots
+
 
 class BankItem(BaseModel):
     """Item in bank storage"""

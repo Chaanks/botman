@@ -88,13 +88,13 @@ class ArtifactsClient:
     async def get_bank_items(
         self, item_code: Optional[str] = None, page: int = 1, size: int = 50
     ) -> List[BankItem]:
-        """Fetch items in bank"""
+        """Fetch items in bank (paginated)"""
         params = [f"page={page}", f"size={size}"]
         if item_code:
             params.append(f"item_code={item_code}")
         endpoint = f"/my/bank/items?{'&'.join(params)}"
-        data = await self._request("GET", endpoint)
-        return [BankItem.model_validate(item) for item in data]
+        response = await self._request_paginated("GET", endpoint)
+        return [BankItem.model_validate(item) for item in response.get("data", [])]
 
     async def get_ge_orders(
         self, code: Optional[str] = None, page: int = 1, size: int = 50

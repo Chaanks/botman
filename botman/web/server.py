@@ -12,6 +12,7 @@ from botman.web.bridge import UIBridge
 from botman.core.bot import Bot, BotRole
 from botman.core.api import ArtifactsClient
 from botman.core.world import World
+from botman.core.bank import Bank
 from botman.core.models import Skill
 from botman.web.components import DashboardPage, BotCard, CharacterDetailPage, TaskFormFields
 from botman.core.tasks.registry import TaskFactory
@@ -72,6 +73,11 @@ async def lifespan(app):
         f"{len(world.maps)} maps, {len(world.monsters)} monsters"
     )
 
+    # Initialize Bank
+    bank_actor = Bank(token)
+    await bank_actor.start()
+    logger.info("Bank initialized")
+
     bots = {}
     for bot_config in bot_configs:
         name = bot_config["name"]
@@ -79,7 +85,7 @@ async def lifespan(app):
         skills = [Skill(skill) for skill in bot_config.get("skills", [])]
 
         try:
-            bot = Bot(name, token, ui_bridge, world, role, skills)
+            bot = Bot(name, token, ui_bridge, world, role, skills, bank_actor)
             await bot.start()
             bots[name] = bot
             skills_str = ", ".join([s.value for s in skills]) if skills else "none"
@@ -90,6 +96,7 @@ async def lifespan(app):
     app.state.ui_bridge = ui_bridge
     app.state.bots = bots
     app.state.world = world
+    app.state.bank_actor = bank_actor
     app.state.logger = logger
 
     logger.info("Bot Manager is running on http://localhost:5173")
@@ -97,6 +104,8 @@ async def lifespan(app):
 
     for bot in bots.values():
         await bot.stop()
+    if bank_actor:
+        await bank_actor.stop()
     if ui_bridge:
         await ui_bridge.stop()
     logger.info("Bot Manager shutdown complete")

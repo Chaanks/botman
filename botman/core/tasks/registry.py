@@ -8,11 +8,13 @@ from botman.core.tasks.base import Task
 from botman.core.tasks.gather import GatherTask
 from botman.core.tasks.deposit import DepositTask
 from botman.core.tasks.craft import CraftTask
+from botman.core.tasks.withdraw import WithdrawTask
 
 TASK_REGISTRY: Dict[str, Type[Task]] = {
     "gather": GatherTask,
     "deposit": DepositTask,
     "craft": CraftTask,
+    "withdraw": WithdrawTask,
 }
 
 

@@ -26,7 +26,7 @@ class BotRole(str, Enum):
     SUPPORT = "support"
 
 class Bot(Actor):
-    def __init__(self, name: str, token: str, ui: Actor, world: World, role: BotRole, skills: list[Skill]):
+    def __init__(self, name: str, token: str, ui: Actor, world: World, role: BotRole, skills: list[Skill], bank: Actor):
         super().__init__()
         self.name = name
         self.token = token
@@ -34,6 +34,7 @@ class Bot(Actor):
         self.world = world
         self.role: BotRole = role
         self.skills: list[Skill] = skills
+        self.bank: Actor = bank
         self.api: Optional[ArtifactsClient] = None
         self.character: Optional[Character] = None
 
@@ -111,7 +112,7 @@ class Bot(Actor):
                     await self._log(f"Starting task: {self.current_task.description()}")
 
                 if self.current_task:
-                    context = TaskContext(self.character, self.api, self.world)
+                    context = TaskContext(self.character, self.api, self.world, self.bank)
                     result = await self.current_task.execute(context)
 
                     # Update character state from result if available

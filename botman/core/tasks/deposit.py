@@ -84,6 +84,13 @@ class DepositTask(Task):
 
             result = await context.api.deposit_item(items=items_to_deposit, name=name)
 
+            # Notify BankActor of deposit
+            if context.bank:
+                await context.bank.tell({
+                    'type': 'update_after_deposit',
+                    'items': items_to_deposit
+                })
+
             # Build log message
             if len(items_to_deposit) == 1:
                 item = items_to_deposit[0]

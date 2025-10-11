@@ -6,6 +6,7 @@ from botman.core.api import ArtifactsClient
 from botman.core.models import Character
 from botman.core.world import World
 from botman.core.errors import BotmanError
+from botman.core.services import BankService
 
 
 @dataclass
@@ -14,6 +15,7 @@ class TaskContext:
     character: Character
     api: ArtifactsClient
     world: World
+    bank: Optional[BankService] = None
 
 
 @dataclass
