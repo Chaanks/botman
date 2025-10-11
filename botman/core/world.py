@@ -14,7 +14,8 @@ class World:
 
     def __init__(self):
         self.items: dict[str, Item] = {}
-        self.maps: dict[str, Map] = {}
+        self.maps: dict[str, Map] = {}  # indexed by content code
+        self.maps_by_pos: dict[tuple[str, int, int], Map] = {}  # indexed by (layer, x, y)
         self.monsters: dict[str, Monster] = {}
         self.resources: dict[str, Resource] = {}
 
@@ -41,6 +42,7 @@ class World:
                 cached_data = pickle.load(f)
             self.items = cached_data["items"]
             self.maps = cached_data["maps"]
+            self.maps_by_pos = cached_data.get("maps_by_pos", {})
             self.monsters = cached_data["monsters"]
             self.resources = cached_data["resources"]
             return True
@@ -54,6 +56,7 @@ class World:
             cache_data = {
                 "items": self.items,
                 "maps": self.maps,
+                "maps_by_pos": self.maps_by_pos,
                 "monsters": self.monsters,
                 "resources": self.resources,
             }
@@ -72,10 +75,32 @@ class World:
         self.resources = {resource.code: resource for resource in resources}
 
         all_maps = await self._fetch_all_pages(api.get_maps)
+        logger.info(f"*** Fetched {len(all_maps)} total maps from API ***")
+
         self.maps = {}
-        for map_obj in all_maps:
+        self.maps_by_pos = {}
+        for i, map_obj in enumerate(all_maps):
+            # Debug log first few maps
+            if i < 10:
+                logger.info(f"*** Map {i}: layer={map_obj.layer} ({map_obj.x}, {map_obj.y}) = {map_obj.name}, skin={map_obj.skin}, content={map_obj.content}")
+
+            # Index all maps by (layer, x, y)
+            self.maps_by_pos[(map_obj.layer, map_obj.x, map_obj.y)] = map_obj
+
+            # Also index by content code if available (content is unique across all layers)
             if map_obj.content is not None:
                 self.maps[map_obj.content.code] = map_obj
+
+        logger.info(f"*** Indexed {len(self.maps_by_pos)} maps by (layer,x,y), {len(self.maps)} by content ***")
+
+        # Check specific positions on overworld
+        test_pos = [(2, 0), (4, 2), (6, 1), (0, 0)]
+        for x, y in test_pos:
+            tile = self.maps_by_pos.get(("overworld", x, y))
+            if tile:
+                logger.info(f"*** Test position overworld ({x}, {y}): {tile.name}, skin={tile.skin}")
+            else:
+                logger.warning(f"*** Test position overworld ({x}, {y}): NOT FOUND")
 
     async def _fetch_all_pages(self, fetch_func, page_size: int = 100):
         all_items = []
@@ -112,6 +137,29 @@ class World:
 
     def map_by_skill(self, skill: Skill) -> Optional[Map]:
         return self.map_by_content(skill.value)
+
+    def map_by_position(self, layer: str, x: int, y: int) -> Optional[Map]:
+        """Get map tile at specific layer and position
+
+        Args:
+            layer: Map layer ("overworld", "underground", "interior")
+            x: X coordinate
+            y: Y coordinate
+        """
+        result = self.maps_by_pos.get((layer, x, y))
+        if result:
+            logger.debug(f"map_by_position({layer}, {x}, {y}) -> {result.name} (skin={result.skin})")
+        else:
+            logger.warning(f"map_by_position({layer}, {x}, {y}) -> NOT FOUND")
+        return result
+
+    def map_for_character(self, character) -> Optional[Map]:
+        """Get map tile for a character's current location
+
+        Args:
+            character: Character object with layer, position.x, position.y
+        """
+        return self.map_by_position(character.layer, character.position.x, character.position.y)
 
     def gathering_location(self, resource_code: str) -> Optional[tuple[int, int]]:
         map_obj = self.map_by_content(resource_code)

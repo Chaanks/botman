@@ -71,10 +71,17 @@ class CharacterStats(BaseModel):
 
     hp: int
     max_hp: int
+    haste: int
+    critical_strike: int
+    wisdom: int
+    prospecting: int
+    initiative: int
+    threat: int
     attack_fire: int
     attack_earth: int
     attack_water: int
     attack_air: int
+    dmg: int  # Overall damage %
     dmg_fire: int
     dmg_earth: int
     dmg_water: int
@@ -83,8 +90,6 @@ class CharacterStats(BaseModel):
     res_earth: int
     res_water: int
     res_air: int
-    haste: int
-    critical_strike: int
 
     def total_attack(self) -> int:
         """Sum of all attack elements"""
@@ -118,6 +123,7 @@ class CharacterEquipment(BaseModel):
     """Character equipped items"""
 
     weapon_slot: Optional[str] = None
+    rune_slot: Optional[str] = None
     shield_slot: Optional[str] = None
     helmet_slot: Optional[str] = None
     body_armor_slot: Optional[str] = None
@@ -129,6 +135,11 @@ class CharacterEquipment(BaseModel):
     artifact1_slot: Optional[str] = None
     artifact2_slot: Optional[str] = None
     artifact3_slot: Optional[str] = None
+    utility1_slot: Optional[str] = None
+    utility1_slot_quantity: int = 0
+    utility2_slot: Optional[str] = None
+    utility2_slot_quantity: int = 0
+    bag_slot: Optional[str] = None
 
 
 class CharacterCooldown(BaseModel):
@@ -151,6 +162,23 @@ class CharacterCooldown(BaseModel):
         return f"CharacterCooldown(cooldown={self.cooldown}, cooldown_expiration={expiration})"
 
 
+class ActiveEffect(BaseModel):
+    """Active effect on a character"""
+
+    name: str
+    code: str
+    value: int
+    duration: int  # Duration in seconds
+    expiration: datetime
+
+    @field_validator("expiration", mode="before")
+    @classmethod
+    def parse_datetime(cls, v):
+        if isinstance(v, str):
+            return datetime.fromisoformat(v.replace("Z", "+00:00"))
+        return v
+
+
 # ===== Character State =====
 class Character(BaseModel):
     """Complete character state"""
@@ -167,12 +195,23 @@ class Character(BaseModel):
 
     # Position
     position: Position
+    layer: str  # "overworld", "underground", or "interior"
+    map_id: int
 
     # Composed models
     stats: CharacterStats
     skills: CharacterSkills
     equipment: CharacterEquipment
     cooldown_info: CharacterCooldown
+
+    # Effects
+    effects: List[ActiveEffect] = []
+
+    # Task
+    task: Optional[str] = None
+    task_type: Optional[str] = None
+    task_progress: Optional[int] = None
+    task_total: Optional[int] = None
 
     # Inventory
     inventory: List[InventoryItem]
@@ -194,14 +233,23 @@ class Character(BaseModel):
             speed=data["speed"],
             # Position
             position=Position(x=data["x"], y=data["y"]),
+            layer=data["layer"],
+            map_id=data["map_id"],
             # Stats
             stats=CharacterStats(
                 hp=data["hp"],
                 max_hp=data["max_hp"],
+                haste=data["haste"],
+                critical_strike=data["critical_strike"],
+                wisdom=data["wisdom"],
+                prospecting=data["prospecting"],
+                initiative=data["initiative"],
+                threat=data["threat"],
                 attack_fire=data["attack_fire"],
                 attack_earth=data["attack_earth"],
                 attack_water=data["attack_water"],
                 attack_air=data["attack_air"],
+                dmg=data["dmg"],
                 dmg_fire=data["dmg_fire"],
                 dmg_earth=data["dmg_earth"],
                 dmg_water=data["dmg_water"],
@@ -210,8 +258,6 @@ class Character(BaseModel):
                 res_earth=data["res_earth"],
                 res_water=data["res_water"],
                 res_air=data["res_air"],
-                haste=data["haste"],
-                critical_strike=data["critical_strike"],
             ),
             # Skills
             skills=CharacterSkills(
@@ -259,6 +305,7 @@ class Character(BaseModel):
             # Equipment
             equipment=CharacterEquipment(
                 weapon_slot=data.get("weapon_slot"),
+                rune_slot=data.get("rune_slot"),
                 shield_slot=data.get("shield_slot"),
                 helmet_slot=data.get("helmet_slot"),
                 body_armor_slot=data.get("body_armor_slot"),
@@ -270,12 +317,24 @@ class Character(BaseModel):
                 artifact1_slot=data.get("artifact1_slot"),
                 artifact2_slot=data.get("artifact2_slot"),
                 artifact3_slot=data.get("artifact3_slot"),
+                utility1_slot=data.get("utility1_slot"),
+                utility1_slot_quantity=data.get("utility1_slot_quantity", 0),
+                utility2_slot=data.get("utility2_slot"),
+                utility2_slot_quantity=data.get("utility2_slot_quantity", 0),
+                bag_slot=data.get("bag_slot"),
             ),
             # Cooldown info
             cooldown_info=CharacterCooldown(
                 cooldown=data.get("cooldown", 0),
                 cooldown_expiration=data.get("cooldown_expiration"),
             ),
+            # Effects
+            effects=[ActiveEffect(**effect) for effect in data.get("effects", [])],
+            # Task
+            task=data.get("task"),
+            task_type=data.get("task_type"),
+            task_progress=data.get("task_progress"),
+            task_total=data.get("task_total"),
             # Inventory
             inventory=[InventoryItem(**item) for item in data.get("inventory", [])],
             inventory_max_items=data["inventory_max_items"],
@@ -553,10 +612,23 @@ class Account(BaseModel):
 
     username: str
     email: Optional[str] = None
-    subscribed: bool
-    subscription_type: Optional[str] = None
+    member: bool
+    member_expiration: Optional[datetime] = None
+    status: str
+    badges: List[str] = []
+    skins: List[str] = []
     gems: int
+    event_token: int
     achievements_points: int
+    banned: bool = False
+    ban_reason: Optional[str] = None
+
+    @field_validator("member_expiration", mode="before")
+    @classmethod
+    def parse_datetime(cls, v):
+        if v is None or isinstance(v, datetime):
+            return v
+        return datetime.fromisoformat(v.replace("Z", "+00:00"))
 
 
 class CharacterInfo(BaseModel):

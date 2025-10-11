@@ -3,7 +3,7 @@ import asyncio
 import logging
 from typing import Optional
 from botman.core.models import *
-from botman.core.errors import ArtifactsError, error_from_response
+from botman.core.errors import APIError, error_from_response
 
 logger = logging.getLogger("botman.api")
 
@@ -49,7 +49,7 @@ class ArtifactsClient:
                 raise error_from_response(code, message) from e
             except (ValueError, KeyError):
                 # Fallback if response is not valid JSON
-                raise ArtifactsError(e.response.status_code, str(e)) from e
+                raise APIError(e.response.status_code, str(e)) from e
 
     async def _request_paginated(
         self, method: str, endpoint: str, json: Optional[dict] = None
@@ -70,7 +70,7 @@ class ArtifactsClient:
                 raise error_from_response(code, message) from e
             except (ValueError, KeyError):
                 # Fallback if response is not valid JSON
-                raise ArtifactsError(e.response.status_code, str(e)) from e
+                raise APIError(e.response.status_code, str(e)) from e
 
     # ===== Server details =====
     async def get_server_status(self) -> ServerStatus:
@@ -151,9 +151,30 @@ class ArtifactsClient:
         )
 
     # ===== My characters =====
-    async def move(self, x: int, y: int, name: str = None) -> MoveResult:
-        """Move character to position (x, y)"""
-        data = await self._request("POST", f"/my/{name}/action/move", {"x": x, "y": y})
+    async def move(
+        self,
+        x: Optional[int] = None,
+        y: Optional[int] = None,
+        map_id: Optional[int] = None,
+        name: str = None,
+    ) -> MoveResult:
+        """Move character to position (x, y) or map_id
+
+        Args:
+            x: X coordinate (required if map_id not provided)
+            y: Y coordinate (required if map_id not provided)
+            map_id: Map ID to move to (alternative to x/y)
+            name: Character name
+        """
+        body = {}
+        if map_id is not None:
+            body["map_id"] = map_id
+        else:
+            if x is None or y is None:
+                raise ValueError("Must provide either map_id or both x and y coordinates")
+            body["x"] = x
+            body["y"] = y
+        data = await self._request("POST", f"/my/{name}/action/move", body)
         return MoveResult.model_validate(data)
 
     async def transition(self, name: str = None) -> ActionResult:

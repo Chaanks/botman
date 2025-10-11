@@ -7,9 +7,16 @@ from typing import Optional, Dict, Any
 from botman.core.actor import Actor
 from botman.core.api import ArtifactsClient
 from botman.core.models import Character
-from botman.core.tasks import TaskContext
+from botman.core.tasks import Task, TaskContext
 from botman.core.world import World
-from botman.core.errors import CODE_CHARACTER_INVENTORY_FULL
+from botman.core.errors import (
+    FatalError,
+    RecoverableError,
+    RetriableError,
+    APIError,
+    CODE_CHARACTER_INVENTORY_FULL,
+    CODE_BANK_FULL
+)
 
 
 class BotActor(Actor):
@@ -21,35 +28,38 @@ class BotActor(Actor):
         self.world = world
         self.character: Optional[Character] = None
         self.api: Optional[ArtifactsClient] = None
-        self.current_task = None
-        self.task_queue = []
+        self.current_task: Optional[Task] = None
+        self.task_queue: list[Task] = []
         self.execution_task: Optional[asyncio.Task] = None
         self.logger = logging.getLogger(f"botman.bot.{name}")
 
     async def on_start(self):
         self.logger.info(f"Bot {self.name} starting...")
         self.api = ArtifactsClient(self.token)
-
         try:
             self.character = await self.api.get_character(self.name)
             await self._log(f"Initialized (Lvl {self.character.level})")
             await self._publish_status()
             self.execution_task = asyncio.create_task(self._execution_loop())
+        except APIError as e:
+            await self._log(f"Fatal error during initialization: {e}", level="CRITICAL")
+            self.logger.error(f"Initialization failed:\n{traceback.format_exc()}")
+            # If init fails, we can't continue.
+            # TODO: notify a supervisor.
+            await self.stop()
         except Exception as e:
-            await self._log(f"Failed to initialize: {e}", level="ERROR")
-            self.logger.error(f"Initialization error:\n{traceback.format_exc()}")
+            await self._log(f"An unexpected error occurred during startup: {e}", level="CRITICAL")
+            self.logger.error(f"Unexpected initialization error:\n{traceback.format_exc()}")
             raise
 
     async def on_stop(self):
         self.logger.info(f"Bot {self.name} stopping...")
-
         if self.execution_task:
             self.execution_task.cancel()
             try:
                 await self.execution_task
             except asyncio.CancelledError:
                 pass
-
         if self.api:
             await self.api.close()
 
@@ -78,8 +88,8 @@ class BotActor(Actor):
             return None
 
     async def _execution_loop(self):
-        try:
-            while self._running:
+        while self._running:
+            try:
                 if not self.character.can_act():
                     await self._publish_status()
                     await asyncio.sleep(0.5)
@@ -88,70 +98,68 @@ class BotActor(Actor):
                 if not self.current_task and self.task_queue:
                     self.current_task = self.task_queue.pop(0)
                     await self._log(f"Starting task: {self.current_task.description()}")
-                    await self._publish_status()
 
                 if self.current_task:
-                    try:
-                        context = TaskContext(
-                            character=self.character,
-                            api=self.api,
-                            world=self.world
-                        )
-                        result = await self.current_task.execute(context)
+                    context = TaskContext(self.character, self.api, self.world)
+                    result = await self.current_task.execute(context)
 
-                        if result.log_messages:
-                            for message, level in result.log_messages:
-                                await self._log(message, level=level)
+                    # Update character state from result if available
+                    if result.character:
+                        self.character = result.character
+                    
+                    # Log any messages from the task
+                    if result.log_messages:
+                        for message, level in result.log_messages:
+                            await self._log(message, level=level)
 
-                        if result.character:
-                            self.character = result.character
-
-                        if result.completed:
-                            await self._log(f"Task completed: {self.current_task.description()}")
+                    if result.error:
+                        error = result.error
+                        if isinstance(error, FatalError):
+                            await self._log(f"Fatal error, stopping bot: {error}", "CRITICAL")
+                            self._running = False
+                            continue
+                        elif isinstance(error, RecoverableError):
+                            await self._log(f"Task paused for recovery: {error}", "WARNING")
+                            await self._handle_recovery(self.current_task, error)
                             self.current_task = None
-                        elif result.paused:
-                            await self._handle_paused_task(self.current_task, result)
+                        elif isinstance(error, RetriableError):
+                            await self._log(f"Retriable error: {error}. Waiting for cooldown.", "INFO")
+                            # Do NOT clear current_task, so it runs again after cooldown
+                        else:
+                            await self._log(f"Task failed: {error}", "ERROR")
                             self.current_task = None
-                        elif result.error:
-                            await self._log(f"Task failed: {result.error}", level="ERROR")
-                            self.current_task = None
-
-                        await self._publish_status()
-                    except Exception as e:
-                        await self._log(f"Task execution exception: {e}", level="ERROR")
-                        self.logger.error(
-                            f"Task execution exception for task '{self.current_task.description()}':\n"
-                            f"{traceback.format_exc()}"
-                        )
+                    elif result.completed:
+                        await self._log(f"Task completed: {self.current_task.description()}")
                         self.current_task = None
-                        await self._publish_status()
 
-                await asyncio.sleep(0.01)
-        except asyncio.CancelledError:
-            self.logger.info(f"Execution loop cancelled for {self.name}")
-            raise
-        except Exception as e:
-            await self._log(f"Execution loop error: {e}", level="ERROR")
-            self.logger.error(f"Execution loop error:\n{traceback.format_exc()}")
+                await self._publish_status()
+                await asyncio.sleep(0.1) # TODO tweak this
 
-    async def _handle_paused_task(self, task, result):
-        error_code = self._extract_error_code(result.error)
-        if error_code == CODE_CHARACTER_INVENTORY_FULL:
-            await self._log("Inventory full - need to implement DepositAllTask for recovery", level="WARNING")
+            except asyncio.CancelledError:
+                self.logger.info(f"Execution loop cancelled for {self.name}")
+                break
+            except Exception:
+                await self._log("An unexpected exception occurred in the execution loop!", "CRITICAL")
+                self.logger.error(f"Execution loop error:\n{traceback.format_exc()}")
+                self.current_task = None
+
+    async def _handle_recovery(self, paused_task: Task, error: RecoverableError):
+        """Handles a recoverable error by queueing a corrective task."""
+        self.task_queue.insert(0, paused_task)
+        await self._log(f"Re-queued task '{paused_task.description()}' to run after recovery.")
+
+        # This is where you would create and queue a specific recovery task.
+        # For example, if a `DepositAllTask` exists:
+        # recovery_task = DepositAllTask()
+        # self.task_queue.insert(0, recovery_task)
+        # await self._log(f"Queued recovery task: {recovery_task.description()}")
+
+        if error.code == CODE_CHARACTER_INVENTORY_FULL:
+            await self._log("Inventory full. A recovery task (e.g., DepositAllTask) should be queued here.", "WARNING")
+        elif error.code == CODE_BANK_FULL:
+            await self._log(f"Bank is full. No recovery task defined.", "ERROR")
         else:
-            await self._log(f"Task paused with unknown error code {error_code}, cannot auto-recover", level="WARNING")
-
-    def _extract_error_code(self, error_str):
-        if not error_str:
-            return None
-        try:
-            start = error_str.find("[")
-            end = error_str.find("]")
-            if start != -1 and end != -1:
-                return int(error_str[start + 1 : end])
-        except (ValueError, IndexError):
-            pass
-        return None
+            await self._log(f"Unknown recoverable error code {error.code}. Cannot auto-recover.", "ERROR")
 
     def _get_status(self) -> str:
         if self.current_task:

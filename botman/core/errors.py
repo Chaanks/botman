@@ -1,15 +1,37 @@
-class ArtifactsError(Exception):
-    """Base exception for all Artifacts-related errors"""
+class BotmanError(Exception):
+    """Base exception"""
+    pass
 
+
+class APIError(BotmanError):
+    """
+    Base exception for all errors originating from the Artifacts API.
+    """
     def __init__(self, code: int, message: str):
         self.code = code
         self.message = message
         super().__init__(f"[{code}] {message}")
 
 
-class TaskError(Exception):
-    """Base exception for task execution errors"""
+class FatalError(APIError):
+    """
+    An error that should stop the bot.
+    """
+    pass
 
+
+class RecoverableError(APIError):
+    """
+    An error that pauses the current task and may require a new,
+    corrective task to be run before the original can resume.
+    """
+    pass
+
+
+class RetriableError(APIError):
+    """
+    An error that can be resolved by waiting and retrying the same action.
+    """
     pass
 
 
@@ -96,9 +118,7 @@ CODE_NPC_NOT_FOR_BUY = 442
 CODE_EVENT_INSUFFICIENT_TOKENS = 563
 CODE_EVENT_NOT_FOUND = 564
 
-
-# ===== Custom Application Error Codes =====
-
+# Custom Application Error Codes
 CODE_RESOURCE_NOT_FOUND = 1000
 CODE_MONSTER_NOT_FOUND = 1001
 CODE_WORKSHOP_NOT_FOUND = 1002
@@ -106,73 +126,81 @@ CODE_ITEM_NOT_FOUND = 1003
 CODE_INVALID_TASK_STATE = 1004
 
 
-# ===== Specific Exception Classes =====
+# Error Code Categorization 
+
+# Errors that should stop the bot
+FATAL_ERROR_CODES = {
+    CODE_TOKEN_INVALID,
+    CODE_TOKEN_EXPIRED,
+    CODE_TOKEN_MISSING,
+    CODE_ACCOUNT_NOT_MEMBER,
+
+    CODE_RESOURCE_NOT_FOUND,
+    CODE_MONSTER_NOT_FOUND,
+    CODE_WORKSHOP_NOT_FOUND,
+    CODE_ITEM_NOT_FOUND,
+    CODE_INVALID_TASK_STATE,
+}
+
+# Errors that need corrective action
+RECOVERABLE_ERROR_CODES = {
+    CODE_CHARACTER_INVENTORY_FULL,
+    CODE_BANK_FULL,
+}
+
+# Errors that just need time
+RETRIABLE_ERROR_CODES = {
+    CODE_CHARACTER_IN_COOLDOWN,
+    CODE_GE_TRANSACTION_IN_PROGRESS,
+    CODE_BANK_TRANSACTION_IN_PROGRESS,
+}
 
 
-class CharacterInCooldownError(ArtifactsError):
-    """Character is in cooldown"""
-
-    def __init__(self, message: str = "Character is in cooldown"):
-        super().__init__(CODE_CHARACTER_IN_COOLDOWN, message)
-
-
-class InventoryFullError(ArtifactsError):
-    """Character inventory is full"""
-
-    def __init__(self, message: str = "Inventory is full"):
-        super().__init__(CODE_CHARACTER_INVENTORY_FULL, message)
-
-
-class InsufficientResourcesError(ArtifactsError):
-    """Not enough resources/items"""
-
-    def __init__(self, message: str = "Insufficient resources"):
-        super().__init__(CODE_MISSING_ITEM, message)
-
-
-class MapNotFoundError(ArtifactsError):
-    """Map or location not found"""
-
-    def __init__(self, message: str = "Map not found"):
-        super().__init__(CODE_MAP_NOT_FOUND, message)
-
-
-class ResourceNotFoundError(TaskError):
-    """Resource gathering location not found"""
-
-    def __init__(self, resource_code: str):
-        self.resource_code = resource_code
-        super().__init__(
-            f"Cannot find gathering location for resource: {resource_code}"
-        )
-
-
-class MonsterNotFoundError(TaskError):
-    """Monster location not found"""
-
-    def __init__(self, monster_code: str):
-        self.monster_code = monster_code
-        super().__init__(f"Cannot find location for monster: {monster_code}")
-
-
-class WorkshopNotFoundError(TaskError):
-    """Workshop location not found"""
-
-    def __init__(self, skill: str):
-        self.skill = skill
-        super().__init__(f"Cannot find workshop for skill: {skill}")
-
-
-def error_from_response(code: int, message: str) -> ArtifactsError:
-    """Create specific exception from API error response"""
-    # Map to specific exceptions
-    if code == CODE_CHARACTER_IN_COOLDOWN:
-        return CharacterInCooldownError(message)
-    elif code == CODE_CHARACTER_INVENTORY_FULL:
-        return InventoryFullError(message)
-    elif code == CODE_MISSING_ITEM:
-        return InsufficientResourcesError(message)
-    elif code == CODE_MAP_NOT_FOUND:
-        return MapNotFoundError(message)
+def error_from_response(code: int, message: str) -> APIError:
+    """
+    Create an exception from an API error response.
+    
+    Returns the appropriate exception type based on the error code's behavior:
+    - FatalError: Stop the bot
+    - RecoverableError: Pause task and run recovery
+    - RetriableError: Wait and retry
+    - APIError: Log and fail task
+    
+    Args:
+        code: The error code from the API
+        message: The error message from the API
+        
+    Returns:
+        An exception instance with the appropriate behavior type
+        
+    Example:
+        >>> error = error_from_response(497, "Inventory is full")
+        >>> isinstance(error, RecoverableError)
+        True
+        >>> error.code
+        497
+    """
+    if code in FATAL_ERROR_CODES:
+        return FatalError(code, message)
+    elif code in RECOVERABLE_ERROR_CODES:
+        return RecoverableError(code, message)
+    elif code in RETRIABLE_ERROR_CODES:
+        return RetriableError(code, message)
     else:
-        return ArtifactsError(code, message)
+        return APIError(code, message)
+
+
+def get_error_behavior(code: int) -> str:
+    """
+    Get the behavior type for an error code.
+    
+    Returns: "fatal", "recoverable", "retriable", or "normal"
+    """
+    if code in FATAL_ERROR_CODES:
+        return "fatal"
+    elif code in RECOVERABLE_ERROR_CODES:
+        return "recoverable"
+    elif code in RETRIABLE_ERROR_CODES:
+        return "retriable"
+    else:
+        return "normal"

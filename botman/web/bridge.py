@@ -25,6 +25,8 @@ class UIBridge(Actor):
             return await self._handle_get_state(message)
         elif msg_type == 'subscribe':
             return await self._handle_subscribe(message)
+        elif msg_type == 'unsubscribe':
+            return await self._handle_unsubscribe(message)
         else:
             logger.warning(f"Unknown message type: {msg_type}")
             return None
@@ -66,6 +68,17 @@ class UIBridge(Actor):
 
         self.subscribers.append(queue)
         return {'success': True, 'subscriber_count': len(self.subscribers)}
+
+    async def _handle_unsubscribe(self, message: Dict[str, Any]) -> Dict[str, Any]:
+        queue = message.get('queue')
+        if not isinstance(queue, asyncio.Queue):
+            return {'success': False, 'error': 'Invalid queue object'}
+
+        try:
+            self.subscribers.remove(queue)
+            return {'success': True, 'subscriber_count': len(self.subscribers)}
+        except ValueError:
+            return {'success': False, 'error': 'Queue not found', 'subscriber_count': len(self.subscribers)}
 
     async def _broadcast(self, update: tuple) -> None:
         dead_queues = []
