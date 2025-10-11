@@ -228,7 +228,7 @@ class Bot(Actor):
         }
 
         # Only publish if state changed (excluding character object which always differs)
-        state_key = (bot_data['status'], bot_data['current_task'], bot_data['progress'], bot_data['queue_size'])
+        state_key = (bot_data['status'], bot_data['current_task'], bot_data['progress'], bot_data['queue_size'], bot_data['cooldown'])
 
         if force or self._last_published_state != state_key:
             self._last_published_state = state_key

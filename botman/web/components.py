@@ -445,32 +445,6 @@ def DashboardPage(state: dict, world=None):
         # Logs section
         LogsSection(logs),
 
-        # Client-side cooldown countdown script
-        Script("""
-        (function() {
-            function updateCooldowns() {
-                document.querySelectorAll('[data-cooldown]').forEach(el => {
-                    let cooldown = parseInt(el.dataset.cooldown);
-                    if (cooldown > 0) {
-                        cooldown--;
-                        el.dataset.cooldown = cooldown;
-                        el.textContent = cooldown > 0 ? cooldown + 's' : 'Ready';
-                    }
-                });
-            }
-
-            // Update every second
-            setInterval(updateCooldowns, 1000);
-
-            // Also update when SSE swaps occur (HTMX reinitializes elements)
-            document.body.addEventListener('htmx:afterSwap', function(evt) {
-                if (evt.detail.target.id && evt.detail.target.id.startsWith('bot-')) {
-                    // New bot card swapped in, cooldown will be in data attribute
-                }
-            });
-        })();
-        """),
-
         cls=ContainerT.xl,
         id="main-content"
     )
