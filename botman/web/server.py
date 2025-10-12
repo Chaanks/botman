@@ -14,6 +14,7 @@ from botman.core.api import ArtifactsClient
 from botman.core.world import World
 from botman.core.bank import Bank
 from botman.core.models import Skill
+from botman.core.mrp.orchestrator import JobOrchestrator
 from botman.web.components import DashboardPage, BotCard, CharacterDetailPage, TaskFormFields
 from botman.core.tasks.registry import TaskFactory
 
@@ -32,6 +33,7 @@ def setup_logging(log_file="logs/botman.log"):
         ],
     )
     logging.getLogger("httpcore").setLevel(logging.WARNING)
+    logging.getLogger("httpx").setLevel(logging.INFO)
 
     return logging.getLogger("botman")
 
@@ -78,6 +80,11 @@ async def lifespan(app):
     await bank_actor.start()
     logger.info("Bank initialized")
 
+    # Initialize JobOrchestrator for MRP system
+    orchestrator = JobOrchestrator(world)
+    await orchestrator.start()
+    logger.info("JobOrchestrator initialized")
+
     bots = {}
     for bot_config in bot_configs:
         name = bot_config["name"]
@@ -85,7 +92,7 @@ async def lifespan(app):
         skills = [Skill(skill) for skill in bot_config.get("skills", [])]
 
         try:
-            bot = Bot(name, token, ui_bridge, world, role, skills, bank_actor)
+            bot = Bot(name, token, ui_bridge, world, role, skills, bank_actor, orchestrator)
             await bot.start()
             bots[name] = bot
             skills_str = ", ".join([s.value for s in skills]) if skills else "none"
@@ -97,6 +104,7 @@ async def lifespan(app):
     app.state.bots = bots
     app.state.world = world
     app.state.bank_actor = bank_actor
+    app.state.orchestrator = orchestrator
     app.state.logger = logger
 
     logger.info("Bot Manager is running on http://localhost:5173")
@@ -104,6 +112,8 @@ async def lifespan(app):
 
     for bot in bots.values():
         await bot.stop()
+    if orchestrator:
+        await orchestrator.stop()
     if bank_actor:
         await bank_actor.stop()
     if ui_bridge:
@@ -319,4 +329,240 @@ async def character(app, req, bot_name: str):
         sse_connect="/events",
         id="app-body",
         cls="bg-gray-600"
+    )
+
+
+# ===== MRP Production Planning Routes =====
+
+@rt("/production")
+async def production(app, req):
+    """Production planning page."""
+    # Get craftable items
+    response = await app.state.orchestrator.ask({'type': 'list_craftable_items'})
+    craftable_items = response.get('items', [])
+
+    # Get current plan status
+    plan_response = await app.state.orchestrator.ask({'type': 'get_plan_status'})
+
+    page_content = Div(
+        # Header
+        Div(
+            H1("Production Planning", cls="text-2xl font-bold text-white mb-2"),
+            P("Create multi-bot production plans using Material Requirements Planning (MRP)",
+              cls="text-gray-400"),
+            A("← Back to Dashboard", href="/", cls="text-blue-400 hover:text-blue-300"),
+            cls="mb-6"
+        ),
+
+        # Create Plan Form
+        Card(
+            H2("Create Production Plan", cls="text-xl font-semibold text-white mb-4"),
+            Form(
+                Div(
+                    Label("Item to Craft", cls="text-sm text-gray-400 mb-1 block"),
+                    Select(
+                        *[Option(item['name'], value=item['code']) for item in craftable_items],
+                        name="item_code",
+                        required=True,
+                        cls="w-full bg-gray-700 text-white border border-gray-600 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    ),
+                    cls="mb-4"
+                ),
+                Div(
+                    Label("Quantity", cls="text-sm text-gray-400 mb-1 block"),
+                    Input(
+                        type="number",
+                        name="quantity",
+                        value="10",
+                        min="1",
+                        required=True,
+                        cls="w-full bg-gray-700 text-white border border-gray-600 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    ),
+                    cls="mb-4"
+                ),
+                Button(
+                    "Create Plan",
+                    type="submit",
+                    cls="w-full bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 px-4 rounded-md transition-colors"
+                ),
+                hx_post="/production/create",
+                hx_target="#plan-status",
+                hx_swap="outerHTML",
+                cls="space-y-4"
+            ),
+            cls="mb-6"
+        ),
+
+        # Plan Status
+        Div(id="plan-status", *_render_plan_status(plan_response)),
+
+        cls="max-w-6xl mx-auto p-6"
+    )
+
+    if req.headers.get('HX-Request'):
+        return page_content
+
+    return Title("Production Planning"), Body(
+        page_content,
+        hx_ext="sse",
+        sse_connect="/events",
+        id="app-body",
+        cls="bg-gray-600"
+    )
+
+
+@rt("/production/create")
+async def post(app, req):
+    """Create a new production plan."""
+    form_data = await req.form()
+    item_code = form_data.get("item_code")
+    quantity = int(form_data.get("quantity", 1))
+
+    app.state.logger.info(f"Creating production plan: {item_code} x{quantity}")
+
+    response = await app.state.orchestrator.ask({
+        'type': 'create_plan',
+        'item_code': item_code,
+        'quantity': quantity,
+    })
+
+    # Get updated plan status
+    plan_response = await app.state.orchestrator.ask({'type': 'get_plan_status'})
+
+    return Div(id="plan-status", *_render_plan_status(plan_response, response))
+
+
+@rt("/production/status")
+async def production_status(app):
+    """Get current plan status (for polling)."""
+    plan_response = await app.state.orchestrator.ask({'type': 'get_plan_status'})
+    return Div(id="plan-status", *_render_plan_status(plan_response))
+
+
+def _render_plan_status(plan_response, create_response=None):
+    """Helper to render plan status."""
+    elements = []
+
+    # Show creation result if available
+    if create_response:
+        if create_response.get('success'):
+            elements.append(
+                Div(
+                    P(f"✓ Plan created: {create_response['total_jobs']} jobs across {create_response['levels']} dependency levels",
+                      cls="text-green-400"),
+                    cls="bg-green-900/20 border border-green-500 rounded-md p-4 mb-4"
+                )
+            )
+        else:
+            elements.append(
+                Div(
+                    P(f"✗ Error: {create_response.get('error', 'Unknown error')}", cls="text-red-400"),
+                    cls="bg-red-900/20 border border-red-500 rounded-md p-4 mb-4"
+                )
+            )
+
+    if not plan_response.get('active'):
+        elements.append(
+            Card(
+                P("No active production plan", cls="text-gray-400 text-center py-8")
+            )
+        )
+        return elements
+
+    # Active plan
+    plan_id = plan_response['plan_id']
+    goal_item = plan_response['goal_item']
+    goal_quantity = plan_response['goal_quantity']
+    progress = plan_response['progress']
+    is_complete = plan_response['is_complete']
+    jobs_by_status = plan_response['jobs_by_status']
+
+    elements.append(
+        Card(
+            H2("Active Production Plan", cls="text-xl font-semibold text-white mb-4"),
+            Div(
+                Div(
+                    Span("Goal: ", cls="text-gray-400"),
+                    Span(f"{goal_item} x{goal_quantity}", cls="text-white font-medium"),
+                ),
+                Div(
+                    Span("Plan ID: ", cls="text-gray-400"),
+                    Span(plan_id, cls="text-white font-mono text-sm"),
+                ),
+                Div(
+                    Span("Progress: ", cls="text-gray-400"),
+                    Span(progress, cls="text-white font-medium"),
+                    Span(" ✓ Complete" if is_complete else "", cls="text-green-400 ml-2"),
+                ),
+                cls="space-y-2 mb-6"
+            ),
+
+            # Jobs by status
+            Div(
+                H3("Jobs", cls="text-lg font-semibold text-white mb-3"),
+                *_render_jobs_by_status(jobs_by_status),
+                cls="space-y-4"
+            ),
+
+            # Refresh button
+            Button(
+                "Refresh Status",
+                hx_get="/production/status",
+                hx_target="#plan-status",
+                hx_swap="outerHTML",
+                cls="mt-4 bg-gray-700 hover:bg-gray-600 text-white py-2 px-4 rounded-md text-sm"
+            ),
+        )
+    )
+
+    return elements
+
+
+def _render_jobs_by_status(jobs_by_status):
+    """Render job lists organized by status."""
+    elements = []
+
+    status_colors = {
+        'completed': ('bg-green-900/20 border-green-600', 'text-green-400'),
+        'in_progress': ('bg-blue-900/20 border-blue-600', 'text-blue-400'),
+        'claimed': ('bg-yellow-900/20 border-yellow-600', 'text-yellow-400'),
+        'pending': ('bg-gray-800 border-gray-600', 'text-gray-400'),
+        'failed': ('bg-red-900/20 border-red-600', 'text-red-400'),
+    }
+
+    for status, jobs in jobs_by_status.items():
+        if not jobs:
+            continue
+
+        bg_color, text_color = status_colors.get(status, ('bg-gray-800 border-gray-600', 'text-gray-400'))
+
+        elements.append(
+            Div(
+                Div(
+                    Span(status.replace('_', ' ').title(), cls=f"font-medium {text_color}"),
+                    Span(f"({len(jobs)})", cls="text-gray-500 ml-1"),
+                    cls="text-sm font-semibold mb-2"
+                ),
+                Div(
+                    *[_render_job_item(job) for job in jobs],
+                    cls="space-y-1"
+                ),
+                cls=f"{bg_color} border rounded-md p-3"
+            )
+        )
+
+    return elements
+
+
+def _render_job_item(job):
+    """Render a single job item."""
+    claimed_info = f" (by {job['claimed_by']})" if job.get('claimed_by') else ""
+    deps_info = f" | deps: {len(job['depends_on'])}" if job['depends_on'] else ""
+
+    return Div(
+        Span(f"{job['type']}: ", cls="text-gray-500 text-xs"),
+        Span(f"{job['item_code']} x{job['quantity']}", cls="text-white text-sm font-mono"),
+        Span(claimed_info, cls="text-gray-400 text-xs"),
+        Span(deps_info, cls="text-gray-500 text-xs"),
+        cls="text-sm"
     )

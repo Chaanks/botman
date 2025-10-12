@@ -6,12 +6,14 @@ from dataclasses import fields
 
 from botman.core.tasks.base import Task
 from botman.core.tasks.gather import GatherTask
+from botman.core.tasks.fight import FightTask
 from botman.core.tasks.deposit import DepositTask
 from botman.core.tasks.craft import CraftTask
 from botman.core.tasks.withdraw import WithdrawTask
 
 TASK_REGISTRY: Dict[str, Type[Task]] = {
     "gather": GatherTask,
+    "fight": FightTask,
     "deposit": DepositTask,
     "craft": CraftTask,
     "withdraw": WithdrawTask,
@@ -23,19 +25,6 @@ class TaskFactory:
 
     @staticmethod
     def create_task(task_type: str, params: Dict[str, Any]) -> Optional[Task]:
-        """
-        Create a task instance from task type and parameters.
-
-        Args:
-            task_type: The type of task (e.g., "gather", "deposit", "craft")
-            params: Dictionary of parameters for the task
-
-        Returns:
-            Task instance or None if task type not found
-
-        Raises:
-            ValueError: If parameters are invalid for the task type
-        """
         task_class = TASK_REGISTRY.get(task_type)
         if not task_class:
             return None
@@ -50,16 +39,6 @@ class TaskFactory:
 
     @staticmethod
     def _parse_params(task_class: Type[Task], params: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Parse and convert parameters to match task class field types.
-
-        Args:
-            task_class: The task class
-            params: Raw parameters from web form
-
-        Returns:
-            Parsed parameters ready for task instantiation
-        """
         parsed = {}
         task_fields = {f.name: f for f in fields(task_class)}
 
@@ -92,15 +71,6 @@ class TaskFactory:
 
     @staticmethod
     def get_task_schema(task_type: str) -> Optional[Dict[str, Any]]:
-        """
-        Get schema information for a task type (for UI generation).
-
-        Args:
-            task_type: The type of task
-
-        Returns:
-            Schema dictionary with field information or None if not found
-        """
         task_class = TASK_REGISTRY.get(task_type)
         if not task_class:
             return None
@@ -131,5 +101,4 @@ class TaskFactory:
 
     @staticmethod
     def list_task_types() -> List[str]:
-        """Get list of available task types."""
         return list(TASK_REGISTRY.keys())

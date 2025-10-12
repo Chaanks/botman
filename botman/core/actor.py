@@ -9,7 +9,9 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class _MessageEnvelope:
-    content: Dict[str, Any]
+    """Envelope for actor messages - content can be any type."""
+
+    content: Any  # Accept any message type (dict, dataclass, etc.)
     reply_future: Optional[asyncio.Future] = None
 
 
@@ -66,21 +68,33 @@ class Actor(ABC):
                     if envelope.reply_future and not envelope.reply_future.done():
                         envelope.reply_future.set_exception(e)
                     else:
-                        logger.error(f"Error processing message in {self.__class__.__name__}: {e}")
+                        logger.error(
+                            f"Error processing message in {self.__class__.__name__}: {e}"
+                        )
         except asyncio.CancelledError:
             pass
 
     @abstractmethod
-    async def on_receive(self, message: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    async def on_receive(self, message: Any) -> Optional[Any]:
+        """
+        Handle incoming message.
+
+        Message can be any type:
+        - Dict (legacy)
+        - Dataclass (typed messages)
+        - Any other serializable object
+        """
         raise NotImplementedError("Subclasses must implement on_receive()")
 
-    async def tell(self, message: Dict[str, Any]) -> None:
+    async def tell(self, message: Any) -> None:
+        """Send a fire-and-forget message (no response expected)."""
         if not self._running:
             raise RuntimeError("Actor is not running")
         envelope = _MessageEnvelope(content=message, reply_future=None)
         await self.inbox.put(envelope)
 
-    async def ask(self, message: Dict[str, Any], timeout: float = 5.0) -> Any:
+    async def ask(self, message: Any, timeout: float = 5.0) -> Any:
+        """Send a message and wait for a response."""
         if not self._running:
             raise RuntimeError("Actor is not running")
 

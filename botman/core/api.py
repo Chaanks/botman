@@ -27,7 +27,7 @@ class ArtifactsClient:
                 },
                 timeout=httpx.Timeout(
                     30.0, read=60.0
-                ),  # Longer timeout for slow API responses
+                ),
             )
         return self._client
 
@@ -40,39 +40,41 @@ class ArtifactsClient:
             )
             response.raise_for_status()
             return response.json()["data"]
+        except (httpx.ConnectTimeout, httpx.ReadTimeout, httpx.WriteTimeout, httpx.PoolTimeout) as e:
+            from botman.core.errors import RetriableError
+            raise RetriableError(0, f"Network timeout: {type(e).__name__}") from e
         except httpx.HTTPStatusError as e:
-            # Parse API error response
             try:
                 error_data = e.response.json().get("error", {})
                 code = error_data.get("code", e.response.status_code)
                 message = error_data.get("message", str(e))
                 raise error_from_response(code, message) from e
             except (ValueError, KeyError):
-                # Fallback if response is not valid JSON
                 raise APIError(e.response.status_code, str(e)) from e
 
     async def _request_paginated(
         self, method: str, endpoint: str, json: Optional[dict] = None
     ) -> dict:
-        """Request that returns full response (for paginated endpoints)"""
         try:
             response = await self.client.request(
                 method, f"{self.BASE_URL}{endpoint}", json=json
             )
             response.raise_for_status()
-            return response.json()  # Return full response, not just ["data"]
+            return response.json()
+        except (httpx.ConnectTimeout, httpx.ReadTimeout, httpx.WriteTimeout, httpx.PoolTimeout) as e:
+            from botman.core.errors import RetriableError
+            raise RetriableError(0, f"Network timeout: {type(e).__name__}") from e
         except httpx.HTTPStatusError as e:
-            # Parse API error response
             try:
                 error_data = e.response.json().get("error", {})
                 code = error_data.get("code", e.response.status_code)
                 message = error_data.get("message", str(e))
                 raise error_from_response(code, message) from e
             except (ValueError, KeyError):
-                # Fallback if response is not valid JSON
                 raise APIError(e.response.status_code, str(e)) from e
 
     # ===== Server details =====
+
     async def get_server_status(self) -> ServerStatus:
         """Get server status"""
         data = await self._request("GET", "/")

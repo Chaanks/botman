@@ -34,6 +34,35 @@ def TaskFormFields(task_type: str, bot_name: str):
             cls="space-y-4"
         )
 
+    elif task_type == "fight":
+        return Div(
+            Div(
+                Label("Monster Code", cls="text-sm text-gray-400 mb-1 block"),
+                Input(
+                    type="text",
+                    name="monster_code",
+                    placeholder="e.g., chicken, green_slime",
+                    required=True,
+                    cls="w-full bg-gray-700 text-white border border-gray-600 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                ),
+                P("The code of the monster to fight", cls="text-xs text-gray-500 mt-1")
+            ),
+            Div(
+                Label("Target Kills", cls="text-sm text-gray-400 mb-1 block"),
+                Input(
+                    type="number",
+                    name="target_kills",
+                    placeholder="10",
+                    value="10",
+                    min="1",
+                    required=True,
+                    cls="w-full bg-gray-700 text-white border border-gray-600 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                ),
+                P("How many times to fight the monster", cls="text-xs text-gray-500 mt-1")
+            ),
+            cls="space-y-4"
+        )
+
     elif task_type == "deposit":
         return Div(
             Div(
@@ -433,13 +462,25 @@ def DashboardPage(state: dict, world=None):
         bot_cards.append(BotCard(name, bot_state, map_tile))
 
     return Container(
+        # Header with production link
+        Div(
+            H1("Bot Dashboard", cls="text-2xl font-bold text-white"),
+            A(
+                UkIcon("package", height=18, cls="mr-2"),
+                "Production Planning",
+                href="/production",
+                cls="inline-flex items-center px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium rounded-md transition-colors"
+            ),
+            cls="flex items-center justify-between mb-6"
+        ),
+
         Div(
             Grid(
                 *bot_cards,
                 cols=3,
                 gap=4,
             ),
-            cls="mb-8 mt-4"
+            cls="mb-8"
         ),
 
         # Logs section
@@ -627,6 +668,7 @@ def CharacterDetailPage(bot_name: str, bot_state: dict):
                             Label("Task Type", cls="text-sm text-gray-400 mb-1 block"),
                             Select(
                                 Option("Gather Resource", value="gather"),
+                                Option("Fight Monster", value="fight"),
                                 Option("Deposit Items", value="deposit"),
                                 Option("Craft Items", value="craft"),
                                 name="task_type",

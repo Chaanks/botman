@@ -5,6 +5,15 @@ from enum import Enum
 
 
 # ===== Enums =====
+class BotRole(str, Enum):
+    """Role that defines a bot's primary purpose."""
+
+    GATHERER = "gatherer"
+    FIGHTER = "fighter"
+    CRAFTER = "crafter"
+    SUPPORT = "support"
+
+
 class ItemSlot(str, Enum):
     WEAPON = "weapon"
     SHIELD = "shield"
@@ -165,15 +174,17 @@ class CharacterCooldown(BaseModel):
 class ActiveEffect(BaseModel):
     """Active effect on a character"""
 
-    name: str
     code: str
     value: int
-    duration: int  # Duration in seconds
-    expiration: datetime
+    name: Optional[str] = None
+    duration: Optional[int] = None  # Duration in seconds
+    expiration: Optional[datetime] = None
 
     @field_validator("expiration", mode="before")
     @classmethod
     def parse_datetime(cls, v):
+        if v is None or isinstance(v, datetime):
+            return v
         if isinstance(v, str):
             return datetime.fromisoformat(v.replace("Z", "+00:00"))
         return v
@@ -421,23 +432,41 @@ class ItemDrop(BaseModel):
     quantity: int
 
 
-class Fight(BaseModel):
-    """Combat encounter details"""
-
+class CharacterFightResult(BaseModel):
+    """Individual character result from a fight"""
+    character_name: str
     xp: int
     gold: int
     drops: List[ItemDrop]
-    turns: int
-    monster_blocked_hits: Dict[str, int]
-    player_blocked_hits: Dict[str, int]
-    logs: List[str]
+    final_hp: int
+
+
+class Fight(BaseModel):
+    """Combat encounter details"""
+
     result: str  # "win" or "lose"
+    turns: int
+    opponent: str  # Monster name
+    logs: List[str]
+    characters: List[CharacterFightResult]
 
 
-class FightResult(ActionResult):
-    """Fight action outcome"""
+class FightResult(BaseModel):
+    """Fight action outcome - note: different structure than other ActionResults"""
 
+    cooldown: Cooldown
     fight: Fight
+    characters: List[Character]
+
+    @model_validator(mode="before")
+    @classmethod
+    def transform_characters(cls, data):
+        """Transform flat character data from API to nested Character objects"""
+        if isinstance(data, dict) and "characters" in data:
+            char_list = data["characters"]
+            if char_list and isinstance(char_list[0], dict) and "position" not in char_list[0]:
+                data["characters"] = [Character.from_api_data(char_data) for char_data in char_list]
+        return data
 
 
 class SkillGain(BaseModel):
