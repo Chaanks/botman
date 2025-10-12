@@ -3,8 +3,12 @@ from typing import Dict, Any, Optional, List
 from functools import singledispatchmethod
 
 from botman.core.actor import Actor
-from botman.core.mrp.models import Job, JobStatus, ProductionPlan
-from botman.core.mrp.planner import MaterialRequirementsPlanner
+from botman.core.mrp.models import Job, JobStatus, Goal
+from botman.core.mrp.planner import (
+    CraftGoalPlanner,
+    CombatGoalPlanner,
+    SkillLevelGoalPlanner,
+)
 from botman.core.mrp.messages import (
     QueryJobsRequest,
     QueryJobsResponse,
@@ -18,6 +22,8 @@ from botman.core.mrp.messages import (
     GetPlanStatusResponse,
     CreatePlanRequest,
     CreatePlanResponse,
+    CreateCombatGoalRequest,
+    CreateSkillGoalRequest,
     ListCraftableItemsRequest,
     ListCraftableItemsResponse,
 )
@@ -28,11 +34,11 @@ logger = logging.getLogger(__name__)
 
 class JobOrchestrator(Actor):
     """
-    Central coordinator for production plans and job execution.
+    Central coordinator for goals and job execution.
 
     Responsibilities:
-    - Create production plans from goals
-    - Maintain active production plan
+    - Create goals from requests (craft, combat, skill leveling)
+    - Maintain active goal
     - Publish ready jobs to job board
     - Track job completion and update dependencies
     - Handle job failures
@@ -41,10 +47,14 @@ class JobOrchestrator(Actor):
     def __init__(self, world: World, name: str = "orchestrator", inbox_size: int = 50):
         super().__init__(name=name, inbox_size=inbox_size)
         self.world = world
-        self.planner = MaterialRequirementsPlanner(world)
 
-        # Current production plan (MVP: single plan at a time)
-        self.active_plan: Optional[ProductionPlan] = None
+        # Planners for different goal types
+        self.craft_planner = CraftGoalPlanner(world)
+        self.combat_planner = CombatGoalPlanner(world)
+        self.skill_planner = SkillLevelGoalPlanner(world)
+
+        # Current goal (MVP: single goal at a time)
+        self.active_plan: Optional[Goal] = None
 
         # Job lookup
         self.jobs: Dict[str, Job] = {}
@@ -155,8 +165,8 @@ class JobOrchestrator(Actor):
         return GetPlanStatusResponse(
             active=True,
             plan_id=self.active_plan.plan_id,
-            goal_item=self.active_plan.goal_item,
-            goal_quantity=self.active_plan.goal_quantity,
+            goal_item=self.active_plan.description,
+            goal_quantity=0,  # Not all goals have quantity
             progress=self.active_plan.progress_summary(),
             is_complete=self.active_plan.is_complete(),
             total_jobs=len(self.active_plan.all_jobs),
@@ -165,17 +175,15 @@ class JobOrchestrator(Actor):
 
     @on_receive.register
     async def _(self, msg: CreatePlanRequest) -> CreatePlanResponse:
-        """Handle plan creation request."""
+        """Handle craft goal creation request."""
         if self.active_plan and not self.active_plan.is_complete():
             return CreatePlanResponse(
                 success=False,
                 error=f"Plan {self.active_plan.plan_id} is still active. Complete it first.",
             )
 
-        self.logger.info(
-            f"Creating production plan for {msg.item_code} x{msg.quantity}"
-        )
-        plan = self.planner.create_plan(msg.item_code, msg.quantity)
+        self.logger.info(f"Creating craft goal for {msg.item_code} x{msg.quantity}")
+        plan = self.craft_planner.create_plan(msg.item_code, msg.quantity)
 
         if not plan.all_jobs:
             return CreatePlanResponse(
@@ -187,7 +195,77 @@ class JobOrchestrator(Actor):
         self.jobs = {job.id: job for job in plan.all_jobs}
 
         self.logger.info(
-            f"Plan {plan.plan_id} created with {len(plan.all_jobs)} jobs across {len(plan.jobs_by_level)} levels"
+            f"Goal {plan.plan_id} created: {plan.description} ({len(plan.all_jobs)} jobs)"
+        )
+
+        return CreatePlanResponse(
+            success=True,
+            plan_id=plan.plan_id,
+            total_jobs=len(plan.all_jobs),
+            levels=len(plan.jobs_by_level),
+        )
+
+    @on_receive.register
+    async def _(self, msg: CreateCombatGoalRequest) -> CreatePlanResponse:
+        """Handle combat goal creation request."""
+        if self.active_plan and not self.active_plan.is_complete():
+            return CreatePlanResponse(
+                success=False,
+                error=f"Plan {self.active_plan.plan_id} is still active. Complete it first.",
+            )
+
+        self.logger.info(
+            f"Creating combat goal for {msg.monster_code} x{msg.kill_count}"
+        )
+        plan = self.combat_planner.create_plan(msg.monster_code, msg.kill_count)
+
+        if not plan.all_jobs:
+            return CreatePlanResponse(
+                success=False,
+                error=f"Could not create plan for {msg.monster_code}",
+            )
+
+        self.active_plan = plan
+        self.jobs = {job.id: job for job in plan.all_jobs}
+
+        self.logger.info(
+            f"Goal {plan.plan_id} created: {plan.description} ({len(plan.all_jobs)} jobs)"
+        )
+
+        return CreatePlanResponse(
+            success=True,
+            plan_id=plan.plan_id,
+            total_jobs=len(plan.all_jobs),
+            levels=len(plan.jobs_by_level),
+        )
+
+    @on_receive.register
+    async def _(self, msg: CreateSkillGoalRequest) -> CreatePlanResponse:
+        """Handle skill leveling goal creation request."""
+        if self.active_plan and not self.active_plan.is_complete():
+            return CreatePlanResponse(
+                success=False,
+                error=f"Plan {self.active_plan.plan_id} is still active. Complete it first.",
+            )
+
+        self.logger.info(
+            f"Creating skill goal for {msg.skill.value} to level {msg.target_level}"
+        )
+        plan = self.skill_planner.create_plan(
+            msg.skill, msg.target_level, msg.current_level
+        )
+
+        if not plan.all_jobs:
+            return CreatePlanResponse(
+                success=False,
+                error=f"Could not create plan for {msg.skill.value}",
+            )
+
+        self.active_plan = plan
+        self.jobs = {job.id: job for job in plan.all_jobs}
+
+        self.logger.info(
+            f"Goal {plan.plan_id} created: {plan.description} ({len(plan.all_jobs)} jobs)"
         )
 
         return CreatePlanResponse(
@@ -200,7 +278,7 @@ class JobOrchestrator(Actor):
     @on_receive.register
     async def _(self, msg: ListCraftableItemsRequest) -> ListCraftableItemsResponse:
         """Handle list craftable items request."""
-        items = self.planner.list_craftable_items()
+        items = self.craft_planner.list_craftable_items()
         return ListCraftableItemsResponse(
             items=[{"code": code, "name": name} for code, name in items]
         )

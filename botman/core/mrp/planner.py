@@ -2,14 +2,16 @@ import logging
 import uuid
 from collections import deque
 from typing import Dict, Tuple, List, Optional
+from abc import ABC, abstractmethod
 
 from botman.core.mrp.models import (
     Job,
     JobType,
     JobStatus,
-    ProductionPlan,
+    Goal,
     GatherJob,
     CraftJob,
+    FightJob,
 )
 from botman.core.api.models import Skill, Position, CharacterRole
 from botman.core.world import World
@@ -17,13 +19,22 @@ from botman.core.world import World
 logger = logging.getLogger(__name__)
 
 
-class MaterialRequirementsPlanner:
-    """Plans production by performing BFS traversal of crafting trees."""
+class GoalPlanner(ABC):
+    """Base class for goal planners."""
 
     def __init__(self, world: World):
         self.world = world
 
-    def create_plan(self, item_code: str, quantity: int) -> ProductionPlan:
+    @abstractmethod
+    def create_plan(self, **kwargs) -> Goal:
+        """Create a goal plan from parameters."""
+        pass
+
+
+class CraftGoalPlanner(GoalPlanner):
+    """Plans crafting goals by performing BFS traversal of crafting trees."""
+
+    def create_plan(self, item_code: str, quantity: int) -> Goal:
         """
         Create a production plan for crafting the specified item.
 
@@ -31,8 +42,9 @@ class MaterialRequirementsPlanner:
         Organizes jobs by dependency level (higher level = must complete first).
         """
         plan_id = str(uuid.uuid4())[:8]
-        plan = ProductionPlan(
-            plan_id=plan_id, goal_item=item_code, goal_quantity=quantity
+        plan = Goal(
+            plan_id=plan_id,
+            description=f"Craft {item_code} x{quantity}",
         )
 
         # BFS to calculate materials needed at each level
@@ -340,3 +352,127 @@ class MaterialRequirementsPlanner:
                 craftable.append((item.code, item.name))
         craftable.sort(key=lambda x: x[1])  # Sort by name
         return craftable
+
+
+class CombatGoalPlanner(GoalPlanner):
+    """Plans combat goals (kill N monsters)."""
+
+    def create_plan(self, monster_code: str, kill_count: int) -> Goal:
+        """Create a goal to kill N monsters."""
+        plan_id = str(uuid.uuid4())[:8]
+        plan = Goal(
+            plan_id=plan_id,
+            description=f"Kill {monster_code} x{kill_count}",
+        )
+
+        # Find monster location
+        monster = self.world.monster(monster_code)
+        if not monster:
+            logger.error(f"Monster {monster_code} not found in world data")
+            return plan
+
+        # For now, create a single fight job
+        # Could split into smaller jobs for parallelism later
+        job_id = f"fight_{monster_code}_{uuid.uuid4().hex[:6]}"
+
+        # Find monster location
+        location = None
+        for content in self.world.maps.values():
+            if content.get("code") == monster_code:
+                x, y = content.get("x"), content.get("y")
+                if x is not None and y is not None:
+                    location = Position(x=x, y=y)
+                    break
+
+        fight_job = FightJob(
+            id=job_id,
+            type=JobType.FIGHT,
+            required_role=CharacterRole.FIGHTER,
+            monster_code=monster_code,
+            kill_count=kill_count,
+            location=location,
+            depends_on=set(),
+            status=JobStatus.PENDING,
+        )
+
+        plan.add_job(fight_job, level=0)
+        logger.info(f"Created combat plan {plan_id}: {kill_count}x {monster_code}")
+        return plan
+
+
+class SkillLevelGoalPlanner(GoalPlanner):
+    """Plans skill leveling goals (reach skill level N)."""
+
+    def create_plan(self, skill: Skill, target_level: int, current_level: int = 0) -> Goal:
+        """
+        Create a goal to reach a target skill level.
+
+        Strategy: Find the highest-level resource/item that gives XP for this skill
+        and create gather/craft jobs for it.
+        """
+        plan_id = str(uuid.uuid4())[:8]
+        plan = Goal(
+            plan_id=plan_id,
+            description=f"Level {skill.value} to {target_level}",
+        )
+
+        # For gathering skills: find highest gathering resource
+        if skill in {Skill.MINING, Skill.WOODCUTTING, Skill.FISHING}:
+            resource = self.world.highest_gathering_resource(skill, target_level)
+            if not resource:
+                logger.error(f"No resource found for skill {skill.value}")
+                return plan
+
+            # Estimate: roughly 20 items per level (simplified)
+            levels_needed = target_level - current_level
+            quantity = levels_needed * 20
+
+            job_id = f"gather_{resource.code}_{uuid.uuid4().hex[:6]}"
+            location = self.world.gathering_location(resource.code)
+            position = Position(x=location[0], y=location[1]) if location else None
+
+            gather_job = GatherJob(
+                id=job_id,
+                type=JobType.GATHER,
+                required_role=CharacterRole.GATHERER,
+                item_code=resource.drop.code if resource.drop else resource.code,
+                quantity=quantity,
+                required_skill=skill,
+                location=position,
+                depends_on=set(),
+                status=JobStatus.PENDING,
+            )
+
+            plan.add_job(gather_job, level=0)
+
+        # For crafting skills: find highest craftable item
+        elif skill in {Skill.WEAPONCRAFTING, Skill.GEARCRAFTING, Skill.JEWELRYCRAFTING, Skill.COOKING}:
+            # Find highest level craftable item for this skill
+            best_item = None
+            best_level = 0
+
+            for item in self.world.items.values():
+                if item.craft and item.craft.skill == skill.value:
+                    if item.craft.level > best_level:
+                        best_level = item.craft.level
+                        best_item = item
+
+            if not best_item:
+                logger.error(f"No craftable item found for skill {skill.value}")
+                return plan
+
+            # Estimate: roughly 10 crafts per level (simplified)
+            levels_needed = target_level - current_level
+            quantity = levels_needed * 10
+
+            # Use CraftGoalPlanner to handle dependencies
+            craft_planner = CraftGoalPlanner(self.world)
+            craft_plan = craft_planner.create_plan(best_item.code, quantity)
+
+            # Copy jobs from craft plan
+            for level, jobs in enumerate(craft_plan.jobs_by_level):
+                for job in jobs:
+                    plan.add_job(job, level)
+
+        logger.info(f"Created skill plan {plan_id}: {skill.value} to level {target_level}")
+        return plan

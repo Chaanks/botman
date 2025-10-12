@@ -10,6 +10,7 @@ from botman.core.world import World
 class JobType(str, Enum):
     GATHER = "gather"
     CRAFT = "craft"
+    FIGHT = "fight"
 
 
 class JobStatus(str, Enum):
@@ -30,10 +31,6 @@ class Job(ABC):
 
     # Requirements
     required_role: CharacterRole
-
-    # What to produce
-    item_code: str
-    quantity: int
 
     # Optional fields (with defaults)
     required_skill: Optional[Skill] = None
@@ -64,43 +61,40 @@ class Job(ABC):
         """Convert this job into a list of executable tasks."""
         pass
 
+    @abstractmethod
+    def description(self) -> str:
+        """Human-readable description of this job."""
+        pass
+
     def __repr__(self) -> str:
         deps = f", deps={len(self.depends_on)}" if self.depends_on else ""
-        return f"<{self.__class__.__name__} {self.id}: {self.item_code} x{self.quantity}{deps}>"
+        return f"<{self.__class__.__name__} {self.id}{deps}>"
 
 
 @dataclass
-class ProductionPlan:
-    """Complete plan for producing a target item."""
+class Goal:
+    """A high-level objective that can be decomposed into jobs."""
 
-    # Goal
     plan_id: str
-    goal_item: str
-    goal_quantity: int
+    description: str
 
-    # Jobs organized by dependency level (level 0 = final product)
+    # Jobs organized by dependency level
     jobs_by_level: List[List[Job]] = field(default_factory=list)
-
-    # Flat list for easier access
     all_jobs: List[Job] = field(default_factory=list)
-
-    # Status tracking
     completed_job_ids: Set[str] = field(default_factory=set)
 
     def add_job(self, job: Job, level: int) -> None:
-        # Ensure we have enough levels
         while len(self.jobs_by_level) <= level:
             self.jobs_by_level.append([])
-
         self.jobs_by_level[level].append(job)
         self.all_jobs.append(job)
 
     def get_ready_jobs(self) -> List[Job]:
-        ready = []
-        for job in self.all_jobs:
-            if job.status == JobStatus.PENDING and job.is_ready(self.completed_job_ids):
-                ready.append(job)
-        return ready
+        return [
+            job
+            for job in self.all_jobs
+            if job.status == JobStatus.PENDING and job.is_ready(self.completed_job_ids)
+        ]
 
     def mark_completed(self, job_id: str) -> None:
         self.completed_job_ids.add(job_id)
@@ -109,12 +103,10 @@ class ProductionPlan:
         return len(self.completed_job_ids) == len(self.all_jobs)
 
     def progress_summary(self) -> str:
-        total = len(self.all_jobs)
-        completed = len(self.completed_job_ids)
-        return f"{completed}/{total} jobs completed"
+        return f"{len(self.completed_job_ids)}/{len(self.all_jobs)} jobs"
 
     def __repr__(self) -> str:
-        return f"<ProductionPlan {self.plan_id}: {self.goal_item} x{self.goal_quantity}, {len(self.all_jobs)} jobs>"
+        return f"<Goal {self.plan_id}: {self.description}, {len(self.all_jobs)} jobs>"
 
 
 # Concrete Job Implementations
@@ -124,11 +116,13 @@ class ProductionPlan:
 class GatherJob(Job):
     """Job for gathering resources from the world."""
 
+    item_code: str = ""
+    quantity: int = 0
+
     def to_tasks(self, world: "World") -> List["Task"]:
         from botman.core.tasks.gather import GatherTask
         from botman.core.tasks.deposit import DepositTask
 
-        # Find the resource that drops this item
         resource = world.resource_from_drop(self.item_code)
         if not resource:
             raise ValueError(f"Cannot find resource that drops {self.item_code}")
@@ -138,10 +132,16 @@ class GatherJob(Job):
             DepositTask(deposit_all=True),
         ]
 
+    def description(self) -> str:
+        return f"Gather {self.item_code} x{self.quantity}"
+
 
 @dataclass
 class CraftJob(Job):
     """Job for crafting items at workshops."""
+
+    item_code: str = ""
+    quantity: int = 0
 
     def to_tasks(self, world: "World") -> List["Task"]:
         from botman.core.tasks.withdraw import WithdrawTask
@@ -172,3 +172,22 @@ class CraftJob(Job):
             CraftTask(item_code=self.item_code, target_amount=self.quantity),
             DepositTask(deposit_all=True),
         ]
+
+    def description(self) -> str:
+        return f"Craft {self.item_code} x{self.quantity}"
+
+
+@dataclass
+class FightJob(Job):
+    """Job for fighting monsters."""
+
+    monster_code: str = ""
+    kill_count: int = 0
+
+    def to_tasks(self, world: "World") -> List["Task"]:
+        from botman.core.tasks.fight import FightTask
+
+        return [FightTask(monster_code=self.monster_code, target_kills=self.kill_count)]
+
+    def description(self) -> str:
+        return f"Fight {self.monster_code} x{self.kill_count}"

@@ -1,7 +1,28 @@
 from dataclasses import dataclass
+from typing import Optional
+from enum import Enum
 
 from botman.core.tasks.base import Task, TaskContext, TaskResult
 from botman.core.errors import APIError, FatalError, RecoverableError, RetriableError
+from botman.core.bank.messages import (
+    CheckItemMessage,
+    CheckItemResponse,
+    ReserveItemMessage,
+    ReserveItemResponse,
+    ReleaseReservationMessage,
+    UpdateAfterWithdrawMessage,
+)
+
+
+class FightState(str, Enum):
+    """States for fight task state machine"""
+    INIT = "init"
+    CHECKING_FOOD = "checking_food"
+    MOVING_TO_BANK = "moving_to_bank"
+    WITHDRAWING_FOOD = "withdrawing_food"
+    MOVING_TO_MONSTER = "moving_to_monster"
+    HEALING = "healing"
+    FIGHTING = "fighting"
 
 
 @dataclass
@@ -9,6 +30,10 @@ class FightTask(Task):
     monster_code: str
     target_kills: int
     kills: int = 0
+    state: FightState = FightState.INIT
+    food_code: Optional[str] = None
+    food_reservation_id: Optional[str] = None
+    hp_threshold: int = 50  # Use consumable if HP drops below this
 
     async def execute(self, context: TaskContext) -> TaskResult:
         name = context.character.name
@@ -26,92 +51,243 @@ class FightTask(Task):
                 log_messages=[(str(error), "ERROR")],
             )
 
-        # Find monster location
-        location = context.world.gathering_location(self.monster_code)
-        if not location:
-            error = FatalError(
-                code=1000,
-                message=f"Monster '{self.monster_code}' location not found."
-            )
-            return TaskResult(
-                completed=False,
-                character=context.character,
-                error=error,
-                log_messages=[(str(error), "ERROR")],
-            )
+        # Step 0: Check and reserve food from bank (once at start)
+        if self.state == FightState.INIT:
+            self.state = FightState.CHECKING_FOOD
+            return TaskResult(completed=False, character=context.character)
 
-        target_x, target_y = location
-        current_pos = context.character.position
+        if self.state == FightState.CHECKING_FOOD:
+            # Check bank for food items (priority: cooked_gudgeon > cooked_chicken)
+            if context.bank:
+                for food in ["cooked_gudgeon", "cooked_chicken"]:
+                    check_result: CheckItemResponse = await context.bank.ask(
+                        CheckItemMessage(code=food, quantity=50)
+                    )
 
-        # Step 1: Move to the monster
-        if (current_pos.x, current_pos.y) != (target_x, target_y):
+                    if check_result.available:
+                        # Reserve the food
+                        reserve_qty = min(50, check_result.free)
+                        reserve_result: ReserveItemResponse = await context.bank.ask(
+                            ReserveItemMessage(code=food, quantity=reserve_qty, bot_name=name)
+                        )
+
+                        if reserve_result.success:
+                            self.food_code = food
+                            self.food_reservation_id = reserve_result.reservation_id
+                            self.state = FightState.MOVING_TO_BANK
+                            return TaskResult(
+                                completed=False,
+                                character=context.character,
+                                log_messages=[(f"Reserved {food} x{reserve_qty} from bank", "INFO")]
+                            )
+
+            # No food found or no bank access, skip to fighting
+            self.state = FightState.MOVING_TO_MONSTER
+            return TaskResult(completed=False, character=context.character)
+
+        if self.state == FightState.MOVING_TO_BANK:
+            # Move to bank location (4, 1)
+            BANK_X, BANK_Y = 4, 1
+            current_pos = context.character.position
+
+            if (current_pos.x, current_pos.y) != (BANK_X, BANK_Y):
+                try:
+                    result = await context.api.move(x=BANK_X, y=BANK_Y, name=name)
+                    return TaskResult(
+                        completed=False,
+                        character=result.character,
+                        log_messages=[(f"Moving to bank at ({BANK_X}, {BANK_Y})", "INFO")],
+                    )
+                except APIError as e:
+                    # Release reservation on error
+                    await self._release_reservation(context)
+                    self.state = FightState.MOVING_TO_MONSTER
+                    return TaskResult(completed=False, character=context.character)
+
+            self.state = FightState.WITHDRAWING_FOOD
+            return TaskResult(completed=False, character=context.character)
+
+        if self.state == FightState.WITHDRAWING_FOOD:
+            # Withdraw food from bank
             try:
-                result = await context.api.move(x=target_x, y=target_y, name=name)
+                withdraw_qty = 50  # Withdraw up to 50
+                result = await context.api.withdraw_item(
+                    items=[{"code": self.food_code, "quantity": withdraw_qty}],
+                    name=name
+                )
+
+                # Notify BankActor of withdrawal
+                if context.bank and self.food_reservation_id:
+                    await context.bank.tell(
+                        UpdateAfterWithdrawMessage(
+                            reservation_id=self.food_reservation_id,
+                            actual_quantity=withdraw_qty
+                        )
+                    )
+                    self.food_reservation_id = None
+
+                self.state = FightState.MOVING_TO_MONSTER
                 return TaskResult(
                     completed=False,
                     character=result.character,
-                    log_messages=[(f"Moving to {monster.name} at ({target_x}, {target_y})", "INFO")],
+                    log_messages=[(f"Withdrew {self.food_code} x{withdraw_qty}", "INFO")]
                 )
+
             except APIError as e:
-                return TaskResult(completed=False, character=context.character, error=e)
+                # Release reservation and continue without food
+                await self._release_reservation(context)
+                self.state = FightState.MOVING_TO_MONSTER
+                return TaskResult(completed=False, character=context.character)
 
-        # Step 2: Check HP and rest if needed
-        hp = context.character.stats.hp
-        max_hp = context.character.stats.max_hp
-
-        if hp < max_hp:
-            try:
-                result = await context.api.rest(name)
+        if self.state == FightState.MOVING_TO_MONSTER:
+            # Find monster location
+            location = context.world.gathering_location(self.monster_code)
+            if not location:
+                error = FatalError(
+                    code=1000,
+                    message=f"Monster '{self.monster_code}' location not found."
+                )
                 return TaskResult(
                     completed=False,
-                    character=result.character,
-                    log_messages=[(f"Resting to recover HP ({hp}/{max_hp})", "INFO")],
+                    character=context.character,
+                    error=error,
+                    log_messages=[(str(error), "ERROR")],
+                )
+
+            target_x, target_y = location
+            current_pos = context.character.position
+
+            # Move to the monster
+            if (current_pos.x, current_pos.y) != (target_x, target_y):
+                try:
+                    result = await context.api.move(x=target_x, y=target_y, name=name)
+                    return TaskResult(
+                        completed=False,
+                        character=result.character,
+                        log_messages=[(f"Moving to {monster.name} at ({target_x}, {target_y})", "INFO")],
+                    )
+                except APIError as e:
+                    return TaskResult(completed=False, character=context.character, error=e)
+
+            self.state = FightState.HEALING
+            return TaskResult(completed=False, character=context.character)
+
+        if self.state == FightState.HEALING:
+            # Check HP and heal if needed
+            hp = context.character.stats.hp
+            max_hp = context.character.stats.max_hp
+
+            # Use consumable if HP is low and we have food
+            if hp <= self.hp_threshold and self.food_code:
+                # Check if we have the food in inventory
+                food_in_inv = next(
+                    (item for item in context.character.inventory if item.code == self.food_code),
+                    None
+                )
+
+                if food_in_inv and food_in_inv.quantity > 0:
+                    try:
+                        result = await context.api.use_item(
+                            item_code=self.food_code,
+                            quantity=1,
+                            name=name
+                        )
+                        # Stay in healing state to check HP again
+                        return TaskResult(
+                            completed=False,
+                            character=result.character,
+                            log_messages=[(f"Used {self.food_code} to heal (HP: {hp}/{max_hp})", "INFO")],
+                        )
+                    except APIError as e:
+                        # If healing fails, fall back to resting
+                        pass
+
+            # Rest if HP is low and no food or food failed
+            if hp <= self.hp_threshold:
+                try:
+                    result = await context.api.rest(name)
+                    return TaskResult(
+                        completed=False,
+                        character=result.character,
+                        log_messages=[(f"Resting to recover HP ({hp}/{max_hp})", "INFO")],
+                    )
+                except APIError as e:
+                    return TaskResult(completed=False, character=context.character, error=e)
+
+            # HP is good, proceed to fighting
+            self.state = FightState.FIGHTING
+            return TaskResult(completed=False, character=context.character)
+
+        if self.state == FightState.FIGHTING:
+            try:
+                result = await context.api.fight(name=name)
+                self.kills += 1
+
+                fight_result = result.fight.result  # "win" or "lose"
+
+                # Get character-specific fight results (for solo, there's only one)
+                char_result = result.fight.characters[0] if result.fight.characters else None
+                xp_gained = char_result.xp if char_result else 0
+                gold_gained = char_result.gold if char_result else 0
+                items_dropped = [f"{drop.code} x{drop.quantity}" for drop in char_result.drops] if char_result else []
+                items_str = ", ".join(items_dropped) if items_dropped else "nothing"
+
+                # Get updated character state
+                character = result.characters[0] if result.characters else context.character
+
+                completed = self.kills >= self.target_kills
+
+                log_messages = [
+                    (f"Fight {fight_result}! XP: +{xp_gained}, Gold: +{gold_gained}, Drops: {items_str} ({self.kills}/{self.target_kills})", "INFO")
+                ]
+
+                if completed:
+                    log_messages.append((f"Fighting complete for {monster.name}!", "INFO"))
+                else:
+                    # Go back to healing state to check HP before next fight
+                    self.state = FightState.HEALING
+
+                return TaskResult(
+                    completed=completed,
+                    character=character,
+                    log_messages=log_messages,
                 )
             except APIError as e:
-                return TaskResult(completed=False, character=context.character, error=e)
+                level = "WARNING" if isinstance(e, (RecoverableError, RetriableError)) else "ERROR"
+                return TaskResult(
+                    completed=False,
+                    character=context.character,
+                    error=e,
+                    log_messages=[(f"Fight failed: {e.message}", level)]
+                )
 
-        # Step 3: Fight the monster
+        # Shouldn't reach here
+        return TaskResult(completed=True, character=context.character)
+
+    async def _release_reservation(self, context: TaskContext):
+        """Release food reservation on error (best effort)"""
+        if not self.food_reservation_id or not context.bank:
+            return
+
         try:
-            result = await context.api.fight(name=name)
-            self.kills += 1
-
-            fight_result = result.fight.result  # "win" or "lose"
-
-            # Get character-specific fight results (for solo, there's only one)
-            char_result = result.fight.characters[0] if result.fight.characters else None
-            xp_gained = char_result.xp if char_result else 0
-            gold_gained = char_result.gold if char_result else 0
-            items_dropped = [f"{drop.code} x{drop.quantity}" for drop in char_result.drops] if char_result else []
-            items_str = ", ".join(items_dropped) if items_dropped else "nothing"
-
-            # Get updated character state
-            character = result.characters[0] if result.characters else context.character
-
-            completed = self.kills >= self.target_kills
-
-            log_messages = [
-                (f"Fight {fight_result}! XP: +{xp_gained}, Gold: +{gold_gained}, Drops: {items_str} ({self.kills}/{self.target_kills})", "INFO")
-            ]
-
-            if completed:
-                log_messages.append((f"Fighting complete for {monster.name}!", "INFO"))
-
-            return TaskResult(
-                completed=completed,
-                character=character,
-                log_messages=log_messages,
+            await context.bank.tell(
+                ReleaseReservationMessage(reservation_id=self.food_reservation_id)
             )
-        except APIError as e:
-            level = "WARNING" if isinstance(e, (RecoverableError, RetriableError)) else "ERROR"
-            return TaskResult(
-                completed=False,
-                character=context.character,
-                error=e,
-                log_messages=[(f"Fight failed: {e.message}", level)]
-            )
+            self.food_reservation_id = None
+        except Exception:
+            pass
 
     def progress(self) -> str:
-        return f"{self.kills}/{self.target_kills}"
+        if self.state in {FightState.INIT, FightState.CHECKING_FOOD}:
+            return "Preparing"
+        elif self.state in {FightState.MOVING_TO_BANK, FightState.WITHDRAWING_FOOD}:
+            return "Getting supplies"
+        elif self.state == FightState.MOVING_TO_MONSTER:
+            return "Traveling"
+        elif self.state == FightState.HEALING:
+            return "Healing"
+        else:
+            return f"{self.kills}/{self.target_kills}"
 
     def description(self) -> str:
         monster = self.monster_code.replace("_", " ").title()

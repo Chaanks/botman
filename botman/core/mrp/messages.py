@@ -49,10 +49,27 @@ class GetPlanStatusRequest:
 
 @dataclass
 class CreatePlanRequest:
-    """Create a new production plan."""
+    """Create a new production plan (craft goal)."""
 
     item_code: str
     quantity: int = 1
+
+
+@dataclass
+class CreateCombatGoalRequest:
+    """Create a combat goal."""
+
+    monster_code: str
+    kill_count: int = 1
+
+
+@dataclass
+class CreateSkillGoalRequest:
+    """Create a skill leveling goal."""
+
+    skill: Skill
+    target_level: int
+    current_level: int = 0
 
 
 @dataclass

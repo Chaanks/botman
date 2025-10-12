@@ -8,7 +8,7 @@ from functools import singledispatchmethod
 from botman.core.actor import Actor
 from botman.core.api import ArtifactsClient
 from botman.core.api.models import Character, Skill, CharacterRole
-from botman.core.tasks import Task, TaskContext, DepositTask
+from botman.core.tasks import Task, TaskContext, DepositTask, GatherTask, FightTask
 from botman.core.world import World
 from botman.core.errors import (
     FatalError,
@@ -157,6 +157,10 @@ class Bot(Actor):
                 # Priority 2: If no task, poll job board
                 if not self.current_task and not self.task_queue and self.orchestrator:
                     await self._poll_and_claim_job()
+
+                # Priority 3: If still idle, perform default role-based behavior
+                if not self.current_task and not self.task_queue:
+                    await self._perform_idle_behavior()
 
                 if self.current_task:
                     context = TaskContext(
@@ -342,6 +346,67 @@ class Bot(Actor):
         # Also log to file
         log_func = getattr(self.logger, level.lower(), self.logger.info)
         log_func(f"[{self.name}] {message}")
+
+    # Idle Behavior System
+    def _get_skill_level(self, skill: Skill) -> int:
+        """Get current level for a skill from character data."""
+        if not self.character or not self.character.skills:
+            return 1
+
+        skill_data = getattr(self.character.skills, skill.value, None)
+        if skill_data:
+            return skill_data.level
+        return 1
+
+    async def _perform_idle_behavior(self) -> None:
+        """Default behavior based on role and skills when no jobs available."""
+
+        # GATHERER: Gather highest level resource for primary skill
+        if self.role == CharacterRole.GATHERER and self.skills:
+            primary_skill = self.skills[0]
+            skill_level = self._get_skill_level(primary_skill)
+            resource = self.world.highest_gathering_resource(primary_skill, skill_level)
+
+            if resource:
+                task = GatherTask(resource_code=resource.code, target_amount=100)
+                self.task_queue.append(task)
+                self.task_queue.append(DepositTask(deposit_all=True))
+                await self._log(f"Idle: gathering {resource.code}")
+                return
+
+        # FIGHTER: Fight monsters around your level
+        elif self.role == CharacterRole.FIGHTER:
+            monster = "chicken"
+            task = FightTask(monster_code=monster, target_kills=100)
+            self.task_queue.append(task)
+            self.task_queue.append(DepositTask(deposit_all=True))
+            await self._log(f"Idle: fighting {monster}")
+            return
+
+        # CRAFTER: Level up primary crafting skill
+        elif self.role == CharacterRole.CRAFTER and self.skills:
+            resource = "ash_tree"
+            task = GatherTask(resource_code=resource, target_amount=100)
+            self.task_queue.append(task)
+            self.task_queue.append(DepositTask(deposit_all=True))
+            await self._log(f"Idle: gathering {resource}")
+            return
+
+        # SUPPORT: Gather resources for consumables (fishing/cooking/alchemy)
+        elif self.role == CharacterRole.SUPPORT and self.skills:
+            primary_skill = self.skills[0]
+            skill_level = self._get_skill_level(primary_skill)
+
+            # Support roles gather like gatherers
+            if primary_skill in {Skill.FISHING, Skill.MINING, Skill.ALCHEMY}:
+                resource = self.world.highest_gathering_resource(primary_skill, skill_level)
+
+                if resource:
+                    task = GatherTask(resource_code=resource.code, target_amount=100)
+                    self.task_queue.append(task)
+                    self.task_queue.append(DepositTask(deposit_all=True))
+                    await self._log(f"Idle: gathering {resource.code}")
+                    return
 
     # MRP Job System
     async def _poll_and_claim_job(self) -> None:
