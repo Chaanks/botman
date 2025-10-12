@@ -2,7 +2,7 @@ from dataclasses import dataclass
 from typing import Optional, List, Dict
 
 from botman.core.tasks.base import Task, TaskContext, TaskResult
-from botman.core.errors import APIError, FatalError, RecoverableError, RetriableError
+from botman.core.errors import APIError, RecoverableError, RetriableError
 
 
 @dataclass

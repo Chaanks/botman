@@ -1,9 +1,8 @@
 from dataclasses import dataclass
-from typing import Optional
 
 from botman.core.tasks.base import Task, TaskContext, TaskResult
 from botman.core.errors import APIError, FatalError, RecoverableError, RetriableError
-from botman.core.models import Skill
+from botman.core.api.models import Skill
 
 
 @dataclass

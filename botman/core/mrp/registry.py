@@ -1,9 +1,6 @@
-"""Job Registry - handles job serialization/deserialization."""
-
 from typing import Dict, Any, Type
 from botman.core.mrp.models import Job, JobType, JobStatus, GatherJob, CraftJob
-from botman.core.models import Position, Skill
-from botman.core.bot import BotRole
+from botman.core.api.models import Position, Skill, CharacterRole
 
 
 # Registry mapping JobType to Job class
@@ -22,7 +19,7 @@ def deserialize_job(job_dict: Dict[str, Any]) -> Job:
     # Parse common fields
     job_id = job_dict["id"]
     job_type = JobType(job_dict["type"])
-    required_role = BotRole(job_dict["required_role"])
+    required_role = CharacterRole(job_dict["required_role"])
     item_code = job_dict["item_code"]
     quantity = job_dict["quantity"]
     required_skill = (

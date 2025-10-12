@@ -5,8 +5,8 @@ from enum import Enum
 
 
 # ===== Enums =====
-class BotRole(str, Enum):
-    """Role that defines a bot's primary purpose."""
+class CharacterRole(str, Enum):
+    """Role that defines a character's primary purpose."""
 
     GATHERER = "gatherer"
     FIGHTER = "fighter"

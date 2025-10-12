@@ -1,6 +1,3 @@
-"""
-Task registry and factory for creating tasks from web UI input.
-"""
 from typing import Dict, Any, Optional, Type, List
 from dataclasses import fields
 
@@ -58,11 +55,11 @@ class TaskFactory:
             # Convert value to appropriate type
             if value == "" or value is None:
                 parsed[key] = None
-            elif field_type == int:
+            elif field_type is int:
                 parsed[key] = int(value)
-            elif field_type == float:
+            elif field_type is float:
                 parsed[key] = float(value)
-            elif field_type == bool:
+            elif field_type is bool:
                 parsed[key] = value if isinstance(value, bool) else value.lower() in ('true', '1', 'yes')
             else:
                 parsed[key] = value

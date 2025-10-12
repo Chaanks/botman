@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Optional
 
 from botman.core.api import ArtifactsClient
-from botman.core.models import Item, Map, Monster, Resource, Skill
+from botman.core.api.models import Item, Map, Monster, Resource, Skill
 
 logger = logging.getLogger(__name__)
 

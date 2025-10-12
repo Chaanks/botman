@@ -3,9 +3,36 @@ import logging
 import uuid
 from typing import Dict, Any, Optional, List
 from collections import defaultdict
+from functools import singledispatchmethod
 from botman.core.actor import Actor
 from botman.core.api import ArtifactsClient
-from botman.core.models import Bank, BankItem
+from botman.core.api.models import Bank as BankModel
+from botman.core.bank.messages import (
+    GetBankInfoMessage,
+    GetBankInfoResponse,
+    RefreshBankMessage,
+    RefreshBankResponse,
+    CheckItemMessage,
+    CheckItemResponse,
+    ReserveItemMessage,
+    ReserveItemResponse,
+    ReleaseReservationMessage,
+    ReleaseReservationResponse,
+    UpdateAfterWithdrawMessage,
+    UpdateAfterWithdrawResponse,
+    UpdateAfterDepositMessage,
+    UpdateAfterDepositResponse,
+    CheckGoldMessage,
+    CheckGoldResponse,
+    ReserveGoldMessage,
+    ReserveGoldResponse,
+    ReleaseGoldReservationMessage,
+    ReleaseGoldReservationResponse,
+    UpdateAfterGoldWithdrawMessage,
+    UpdateAfterGoldWithdrawResponse,
+    UpdateAfterGoldDepositMessage,
+    UpdateAfterGoldDepositResponse,
+)
 
 logger = logging.getLogger("botman.bank")
 
@@ -39,13 +66,13 @@ class Bank(Actor):
     - refresh: Force refresh bank state from API
     """
 
-    def __init__(self, token: str):
-        super().__init__()
+    def __init__(self, token: str, name: str = "bank", inbox_size: int = 100):
+        super().__init__(name=name, inbox_size=inbox_size)
         self.token = token
         self.api: Optional[ArtifactsClient] = None
 
         # Bank state
-        self.bank: Optional[Bank] = None
+        self.bank: Optional[BankModel] = None
         self.items: Dict[str, int] = {}  # item_code -> quantity
 
         # Item reservations: item_code -> {reservation_id: (bot_name, quantity)}
@@ -70,68 +97,97 @@ class Bank(Actor):
         if self.api:
             await self.api.close()
 
-    async def on_receive(self, message: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        """Process bank-related messages"""
-        msg_type = message.get('type')
+    @singledispatchmethod
+    async def on_receive(self, message) -> Any:
+        """
+        Process bank-related typed messages using singledispatch.
 
-        # General
-        if msg_type == 'get_bank_info':
-            return await self._handle_get_bank_info()
-        elif msg_type == 'refresh':
-            await self._refresh_bank_state()
-            return {'success': True}
+        All messages must be dataclass instances for type safety.
+        """
+        self.logger.warning(f"Unknown message type: {type(message)}")
+        return None
 
-        # Item operations
-        elif msg_type == 'check_item':
-            item_code = message.get('code')
-            quantity = message.get('quantity', 1)
-            return await self._handle_check_item(item_code, quantity)
+    # General operations
+    @on_receive.register
+    async def _(self, msg: GetBankInfoMessage) -> GetBankInfoResponse:
+        """Handle bank info request."""
+        return GetBankInfoResponse(
+            bank=self.bank,
+            items=dict(self.items),
+            item_reservations={
+                code: {res_id: (bot, qty) for res_id, (bot, qty) in reservations.items()}
+                for code, reservations in self.item_reservations.items()
+            },
+            gold_reservations=dict(self.gold_reservations)
+        )
 
-        elif msg_type == 'reserve_item':
-            item_code = message.get('code')
-            quantity = message.get('quantity', 1)
-            bot_name = message.get('bot_name')
-            return await self._handle_reserve_item(item_code, quantity, bot_name)
+    @on_receive.register
+    async def _(self, msg: RefreshBankMessage) -> RefreshBankResponse:
+        """Handle bank refresh request."""
+        await self._refresh_bank_state()
+        return RefreshBankResponse(success=True)
 
-        elif msg_type == 'release_reservation':
-            reservation_id = message.get('reservation_id')
-            return await self._handle_release_reservation(reservation_id)
+    # Item operations
+    @on_receive.register
+    async def _(self, msg: CheckItemMessage) -> CheckItemResponse:
+        """Handle item availability check."""
+        result = await self._handle_check_item(msg.code, msg.quantity)
+        return CheckItemResponse(**result)
 
-        elif msg_type == 'update_after_withdraw':
-            reservation_id = message.get('reservation_id')
-            actual_quantity = message.get('actual_quantity')
-            return await self._handle_update_after_withdraw(reservation_id, actual_quantity)
+    @on_receive.register
+    async def _(self, msg: ReserveItemMessage) -> ReserveItemResponse:
+        """Handle item reservation request."""
+        result = await self._handle_reserve_item(msg.code, msg.quantity, msg.bot_name)
+        return ReserveItemResponse(**result)
 
-        elif msg_type == 'update_after_deposit':
-            items = message.get('items', [])  # [{"code": "item", "quantity": 1}, ...]
-            return await self._handle_update_after_deposit(items)
+    @on_receive.register
+    async def _(self, msg: ReleaseReservationMessage) -> ReleaseReservationResponse:
+        """Handle reservation release request."""
+        result = await self._handle_release_reservation(msg.reservation_id)
+        return ReleaseReservationResponse(**result)
 
-        # Gold operations
-        elif msg_type == 'check_gold':
-            quantity = message.get('quantity', 1)
-            return await self._handle_check_gold(quantity)
+    @on_receive.register
+    async def _(self, msg: UpdateAfterWithdrawMessage) -> UpdateAfterWithdrawResponse:
+        """Handle post-withdrawal update."""
+        result = await self._handle_update_after_withdraw(msg.reservation_id, msg.actual_quantity)
+        return UpdateAfterWithdrawResponse(**result)
 
-        elif msg_type == 'reserve_gold':
-            quantity = message.get('quantity', 1)
-            bot_name = message.get('bot_name')
-            return await self._handle_reserve_gold(quantity, bot_name)
+    @on_receive.register
+    async def _(self, msg: UpdateAfterDepositMessage) -> UpdateAfterDepositResponse:
+        """Handle post-deposit update."""
+        result = await self._handle_update_after_deposit(msg.items)
+        return UpdateAfterDepositResponse(**result)
 
-        elif msg_type == 'release_gold_reservation':
-            reservation_id = message.get('reservation_id')
-            return await self._handle_release_gold_reservation(reservation_id)
+    # Gold operations
+    @on_receive.register
+    async def _(self, msg: CheckGoldMessage) -> CheckGoldResponse:
+        """Handle gold availability check."""
+        result = await self._handle_check_gold(msg.quantity)
+        return CheckGoldResponse(**result)
 
-        elif msg_type == 'update_after_gold_withdraw':
-            reservation_id = message.get('reservation_id')
-            actual_quantity = message.get('actual_quantity')
-            return await self._handle_update_after_gold_withdraw(reservation_id, actual_quantity)
+    @on_receive.register
+    async def _(self, msg: ReserveGoldMessage) -> ReserveGoldResponse:
+        """Handle gold reservation request."""
+        result = await self._handle_reserve_gold(msg.quantity, msg.bot_name)
+        return ReserveGoldResponse(**result)
 
-        elif msg_type == 'update_after_gold_deposit':
-            quantity = message.get('quantity')
-            return await self._handle_update_after_gold_deposit(quantity)
+    @on_receive.register
+    async def _(self, msg: ReleaseGoldReservationMessage) -> ReleaseGoldReservationResponse:
+        """Handle gold reservation release."""
+        result = await self._handle_release_gold_reservation(msg.reservation_id)
+        return ReleaseGoldReservationResponse(**result)
 
-        else:
-            self.logger.warning(f"Unknown message type: {msg_type}")
-            return {'error': f'Unknown message type: {msg_type}'}
+    @on_receive.register
+    async def _(self, msg: UpdateAfterGoldWithdrawMessage) -> UpdateAfterGoldWithdrawResponse:
+        """Handle post-gold-withdrawal update."""
+        result = await self._handle_update_after_gold_withdraw(msg.reservation_id, msg.actual_quantity)
+        return UpdateAfterGoldWithdrawResponse(**result)
+
+    @on_receive.register
+    async def _(self, msg: UpdateAfterGoldDepositMessage) -> UpdateAfterGoldDepositResponse:
+        """Handle post-gold-deposit update."""
+        result = await self._handle_update_after_gold_deposit(msg.quantity)
+        return UpdateAfterGoldDepositResponse(**result)
 
     async def _refresh_bank_state(self):
         """Refresh bank state from API (all items across pages)"""
@@ -291,7 +347,7 @@ class Bank(Actor):
 
         log_msg = f"Withdrew {actual_quantity}x {item_code} for {bot_name} (reserved: {reserved_quantity}). New bank qty: {new_qty}"
         if actual_quantity != reserved_quantity:
-            log_msg += f" [WARNING: Actual differs from reserved]"
+            log_msg += " [WARNING: Actual differs from reserved]"
         self.logger.info(log_msg)
 
         return {
@@ -410,7 +466,7 @@ class Bank(Actor):
 
         log_msg = f"Withdrew {actual_quantity} gold for {bot_name} (reserved: {reserved_quantity}). New bank gold: {self.bank.gold if self.bank else 0}"
         if actual_quantity != reserved_quantity:
-            log_msg += f" [WARNING: Actual differs from reserved]"
+            log_msg += " [WARNING: Actual differs from reserved]"
         self.logger.info(log_msg)
 
         return {

@@ -450,8 +450,6 @@ def DashboardPage(state: dict, world=None):
         status = bot_state.get("status", "Unknown")
         status_counts[status] = status_counts.get(status, 0) + 1
 
-    status_text = " • ".join([f"{count} {status.lower()}" for status, count in status_counts.items()])
-
     # Create bot cards with map tiles
     bot_cards = []
     for name, bot_state in bots.items():

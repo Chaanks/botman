@@ -1,13 +1,13 @@
 import asyncio
-from enum import Enum
 import logging
 import traceback
 import time
-from typing import Optional, Dict, Any, TYPE_CHECKING
+from typing import Optional, Dict, Any
+from functools import singledispatchmethod
 
 from botman.core.actor import Actor
 from botman.core.api import ArtifactsClient
-from botman.core.models import Character, Skill, BotRole
+from botman.core.api.models import Character, Skill, CharacterRole
 from botman.core.tasks import Task, TaskContext, DepositTask
 from botman.core.world import World
 from botman.core.errors import (
@@ -26,9 +26,16 @@ from botman.core.mrp.messages import (
     CompleteJobRequest,
     CompleteJobResponse,
 )
-
-if TYPE_CHECKING:
-    pass
+from botman.core.bot.messages import (
+    TaskCreateMessage,
+    StatusRequestMessage,
+    GetStatusMessage,
+    GetStatusResponse,
+)
+from botman.web.bridge.messages import (
+    BotChangedMessage,
+    LogMessage,
+)
 
 
 class Bot(Actor):
@@ -38,17 +45,18 @@ class Bot(Actor):
         token: str,
         ui: Actor,
         world: World,
-        role: BotRole,
+        role: CharacterRole,
         skills: list[Skill],
         bank: Actor,
         orchestrator: Optional[Actor] = None,
+        inbox_size: int = 50,
     ):
-        super().__init__()
-        self.name = name
+        super().__init__(name=name, inbox_size=inbox_size)
+        # Note: self.name is now set by Actor.__init__, no need to set it again
         self.token = token
         self.ui = ui
         self.world = world
-        self.role: BotRole = role
+        self.role: CharacterRole = role
         self.skills: list[Skill] = skills
         self.bank: Actor = bank
         self.orchestrator: Optional[Actor] = orchestrator
@@ -99,31 +107,39 @@ class Bot(Actor):
         if self.api:
             await self.api.close()
 
-    async def on_receive(self, message: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        msg_type = message.get("type")
+    @singledispatchmethod
+    async def on_receive(self, message) -> Any:
+        """
+        Handle incoming typed messages using singledispatch.
 
-        if msg_type == "task_create":
-            task = message.get("task")
-            if task:
-                self.task_queue.append(task)
-                await self._log(f"Task queued: {task.description()}")
-                await self._publish_status()
-            return None
-        elif msg_type == "status_request":
-            await self._publish_status()
-            return None
-        elif msg_type == "get_status":
-            return {
-                "name": self.name,
-                "status": self._get_status(),
-                "current_task": self.current_task.description()
-                if self.current_task
-                else None,
-                "cooldown": int(self.character.ready_in()) if self.character else 0,
-            }
-        else:
-            self.logger.warning(f"Unknown message type: {msg_type}")
-            return None
+        All messages must be dataclass instances for type safety.
+        """
+        self.logger.warning(f"Unknown message type: {type(message)}")
+        return None
+
+    @on_receive.register
+    async def _(self, msg: TaskCreateMessage) -> None:
+        """Handle task creation request."""
+        self.task_queue.append(msg.task)
+        await self._log(f"Task queued: {msg.task.description()}")
+        await self._publish_status()
+        return None
+
+    @on_receive.register
+    async def _(self, msg: StatusRequestMessage) -> None:
+        """Handle status publication request."""
+        await self._publish_status()
+        return None
+
+    @on_receive.register
+    async def _(self, msg: GetStatusMessage) -> GetStatusResponse:
+        """Handle status query request."""
+        return GetStatusResponse(
+            name=self.name,
+            status=self._get_status(),
+            current_task=self.current_task.description() if self.current_task else None,
+            cooldown=int(self.character.ready_in()) if self.character else 0,
+        )
 
     async def _execution_loop(self):
         while self._running:
@@ -310,20 +326,17 @@ class Bot(Actor):
 
         if force or self._last_published_state != state_key:
             self._last_published_state = state_key
-            await self.ui.tell(
-                {"type": "bot_changed", "bot_name": self.name, "data": bot_data}
-            )
+            await self.ui.tell(BotChangedMessage(bot_name=self.name, data=bot_data))
 
     async def _log(self, message: str, level: str = "INFO"):
         # Send to UI
         await self.ui.tell(
-            {
-                "type": "log",
-                "level": level,
-                "source": self.name,
-                "message": message,
-                "timestamp": time.time(),
-            }
+            LogMessage(
+                level=level,
+                source=self.name,
+                message=message,
+                timestamp=time.time(),
+            )
         )
 
         # Also log to file

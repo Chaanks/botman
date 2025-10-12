@@ -1,5 +1,3 @@
-"""Material Requirements Planner - calculates jobs needed to craft an item."""
-
 import logging
 import uuid
 from collections import deque
@@ -13,8 +11,7 @@ from botman.core.mrp.models import (
     GatherJob,
     CraftJob,
 )
-from botman.core.models import Skill, Position
-from botman.core.bot import BotRole
+from botman.core.api.models import Skill, Position, CharacterRole
 from botman.core.world import World
 
 logger = logging.getLogger(__name__)
@@ -238,7 +235,7 @@ class MaterialRequirementsPlanner:
         return GatherJob(
             id=job_id,
             type=JobType.GATHER,
-            required_role=BotRole.GATHERER,
+            required_role=CharacterRole.GATHERER,
             item_code=item_code,  # The item we want to gather
             quantity=quantity,
             required_skill=skill,
@@ -302,9 +299,9 @@ class MaterialRequirementsPlanner:
         gathering_skills = {Skill.MINING, Skill.WOODCUTTING, Skill.FISHING}
 
         if skill and skill in gathering_skills:
-            role = BotRole.GATHERER
+            role = CharacterRole.GATHERER
         else:
-            role = BotRole.CRAFTER
+            role = CharacterRole.CRAFTER
 
         # Find dependencies (requirements at the next level)
         depends_on: set[str] = set()

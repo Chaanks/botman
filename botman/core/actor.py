@@ -11,15 +11,16 @@ logger = logging.getLogger(__name__)
 class _MessageEnvelope:
     """Envelope for actor messages - content can be any type."""
 
-    content: Any  # Accept any message type (dict, dataclass, etc.)
+    content: Any
     reply_future: Optional[asyncio.Future] = None
 
 
 class Actor(ABC):
     """Base class for async actors that process messages sequentially via ask/tell."""
 
-    def __init__(self):
-        self.inbox: asyncio.Queue[_MessageEnvelope] = asyncio.Queue()
+    def __init__(self, name: Optional[str] = None, inbox_size: int = 100):
+        self.name = name or self.__class__.__name__
+        self.inbox: asyncio.Queue[_MessageEnvelope] = asyncio.Queue(maxsize=inbox_size)
         self._task: Optional[asyncio.Task] = None
         self._running: bool = False
         self._pending_asks: Dict[str, asyncio.Future] = {}
@@ -55,10 +56,7 @@ class Actor(ABC):
     async def _process_messages(self) -> None:
         try:
             while self._running:
-                try:
-                    envelope = await asyncio.wait_for(self.inbox.get(), timeout=0.1)
-                except asyncio.TimeoutError:
-                    continue
+                envelope = await self.inbox.get()
 
                 try:
                     result = await self.on_receive(envelope.content)
@@ -69,7 +67,7 @@ class Actor(ABC):
                         envelope.reply_future.set_exception(e)
                     else:
                         logger.error(
-                            f"Error processing message in {self.__class__.__name__}: {e}"
+                            f"Error processing message in {self.name}: {e}"
                         )
         except asyncio.CancelledError:
             pass

@@ -2,7 +2,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Optional, Set, List
 from abc import ABC, abstractmethod
-from botman.core.models import Position, Skill, BotRole
+from botman.core.api.models import Position, Skill, CharacterRole
 from botman.core.tasks.base import Task
 from botman.core.world import World
 
@@ -29,7 +29,7 @@ class Job(ABC):
     type: JobType
 
     # Requirements
-    required_role: BotRole
+    required_role: CharacterRole
 
     # What to produce
     item_code: str
@@ -50,7 +50,7 @@ class Job(ABC):
     def is_ready(self, completed_jobs: Set[str]) -> bool:
         return self.depends_on.issubset(completed_jobs)
 
-    def matches_bot(self, role: BotRole, skills: List[Skill]) -> bool:
+    def matches_bot(self, role: CharacterRole, skills: List[Skill]) -> bool:
         if self.required_role != role:
             return False
 

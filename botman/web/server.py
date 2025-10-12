@@ -9,14 +9,17 @@ from fasthtml.common import *
 from monsterui.all import *
 
 from botman.web.bridge import UIBridge
-from botman.core.bot import Bot, BotRole
+from botman.core.bot import Bot
 from botman.core.api import ArtifactsClient
 from botman.core.world import World
 from botman.core.bank import Bank
-from botman.core.models import Skill
+from botman.core.api.models import Skill, CharacterRole
 from botman.core.mrp.orchestrator import JobOrchestrator
 from botman.web.components import DashboardPage, BotCard, CharacterDetailPage, TaskFormFields
 from botman.core.tasks.registry import TaskFactory
+from botman.core.bot.messages import TaskCreateMessage
+from botman.web.bridge.messages import GetStateMessage, SubscribeMessage, UnsubscribeMessage
+from botman.core.mrp.messages import ListCraftableItemsRequest, GetPlanStatusRequest, CreatePlanRequest
 
 
 def setup_logging(log_file="logs/botman.log"):
@@ -65,7 +68,7 @@ async def lifespan(app):
 
     logger.info(f"Starting Bot Manager with {len(bot_configs)} characters")
 
-    ui_bridge = UIBridge()
+    ui_bridge = UIBridge(name="ui", inbox_size=200)
     await ui_bridge.start()
 
     async with ArtifactsClient(token) as api:
@@ -76,23 +79,23 @@ async def lifespan(app):
     )
 
     # Initialize Bank
-    bank_actor = Bank(token)
+    bank_actor = Bank(token, name="bank", inbox_size=100)
     await bank_actor.start()
     logger.info("Bank initialized")
 
     # Initialize JobOrchestrator for MRP system
-    orchestrator = JobOrchestrator(world)
+    orchestrator = JobOrchestrator(world, name="orchestrator", inbox_size=50)
     await orchestrator.start()
     logger.info("JobOrchestrator initialized")
 
     bots = {}
     for bot_config in bot_configs:
         name = bot_config["name"]
-        role = BotRole(bot_config["role"])
+        role = CharacterRole(bot_config["role"])
         skills = [Skill(skill) for skill in bot_config.get("skills", [])]
 
         try:
-            bot = Bot(name, token, ui_bridge, world, role, skills, bank_actor, orchestrator)
+            bot = Bot(name, token, ui_bridge, world, role, skills, bank_actor, orchestrator, inbox_size=50)
             await bot.start()
             bots[name] = bot
             skills_str = ", ".join([s.value for s in skills]) if skills else "none"
@@ -129,8 +132,8 @@ app, rt = fast_app(
 
 @rt
 async def index(app, req):
-    state = await app.state.ui_bridge.ask({'type': 'get_state'})
-    page_content = DashboardPage(state, app.state.world)
+    response = await app.state.ui_bridge.ask(GetStateMessage())
+    page_content = DashboardPage(response.state, app.state.world)
 
     # If htmx request, return just content
     if req.headers.get('HX-Request'):
@@ -152,15 +155,12 @@ async def events(app):
         subscriber_queue = asyncio.Queue()
 
         # Subscribe to updates
-        await app.state.ui_bridge.ask({
-            'type': 'subscribe',
-            'queue': subscriber_queue
-        })
+        await app.state.ui_bridge.ask(SubscribeMessage(queue=subscriber_queue))
         app.state.logger.info(f"SSE: Client connected. Active: {len(app.state.ui_bridge.subscribers)}")
 
         try:
             # Send initial connection message
-            yield f"data: Connected\n\n"
+            yield "data: Connected\n\n"
 
             # Stream updates
             while True:
@@ -183,10 +183,7 @@ async def events(app):
 
         finally:
             # Always cleanup on disconnect
-            await app.state.ui_bridge.ask({
-                'type': 'unsubscribe',
-                'queue': subscriber_queue
-            })
+            await app.state.ui_bridge.ask(UnsubscribeMessage(queue=subscriber_queue))
             app.state.logger.info(f"SSE: Client disconnected. Active: {len(app.state.ui_bridge.subscribers)}")
 
     return EventStream(event_generator())
@@ -233,7 +230,7 @@ async def post(app, req):
             return ""
 
         app.state.logger.info(f"Creating {task_type} task for {bot_name}: {task.description()}")
-        await bot.tell({'type': 'task_create', 'task': task})
+        await bot.tell(TaskCreateMessage(task=task))
         app.state.logger.info(f"Task queued successfully for {bot_name}")
         return ""
 
@@ -310,8 +307,8 @@ async def bot_clear_queue(app, bot_name: str):
 
 @rt("/character/{bot_name}")
 async def character(app, req, bot_name: str):
-    state = await app.state.ui_bridge.ask({'type': 'get_state'})
-    bot_state = state['bots'].get(bot_name)
+    response = await app.state.ui_bridge.ask(GetStateMessage())
+    bot_state = response.state['bots'].get(bot_name)
 
     if not bot_state:
         return Div("Character not found", A("Back to Dashboard", href="/"))
@@ -338,11 +335,11 @@ async def character(app, req, bot_name: str):
 async def production(app, req):
     """Production planning page."""
     # Get craftable items
-    response = await app.state.orchestrator.ask({'type': 'list_craftable_items'})
-    craftable_items = response.get('items', [])
+    items_response = await app.state.orchestrator.ask(ListCraftableItemsRequest())
+    craftable_items = items_response.items
 
     # Get current plan status
-    plan_response = await app.state.orchestrator.ask({'type': 'get_plan_status'})
+    plan_response = await app.state.orchestrator.ask(GetPlanStatusRequest())
 
     page_content = Div(
         # Header
@@ -412,7 +409,7 @@ async def production(app, req):
 
 
 @rt("/production/create")
-async def post(app, req):
+async def production_create(app, req):
     """Create a new production plan."""
     form_data = await req.form()
     item_code = form_data.get("item_code")
@@ -420,14 +417,12 @@ async def post(app, req):
 
     app.state.logger.info(f"Creating production plan: {item_code} x{quantity}")
 
-    response = await app.state.orchestrator.ask({
-        'type': 'create_plan',
-        'item_code': item_code,
-        'quantity': quantity,
-    })
+    response = await app.state.orchestrator.ask(
+        CreatePlanRequest(item_code=item_code, quantity=quantity)
+    )
 
     # Get updated plan status
-    plan_response = await app.state.orchestrator.ask({'type': 'get_plan_status'})
+    plan_response = await app.state.orchestrator.ask(GetPlanStatusRequest())
 
     return Div(id="plan-status", *_render_plan_status(plan_response, response))
 
@@ -435,7 +430,7 @@ async def post(app, req):
 @rt("/production/status")
 async def production_status(app):
     """Get current plan status (for polling)."""
-    plan_response = await app.state.orchestrator.ask({'type': 'get_plan_status'})
+    plan_response = await app.state.orchestrator.ask(GetPlanStatusRequest())
     return Div(id="plan-status", *_render_plan_status(plan_response))
 
 
@@ -445,10 +440,10 @@ def _render_plan_status(plan_response, create_response=None):
 
     # Show creation result if available
     if create_response:
-        if create_response.get('success'):
+        if create_response.success:
             elements.append(
                 Div(
-                    P(f"✓ Plan created: {create_response['total_jobs']} jobs across {create_response['levels']} dependency levels",
+                    P(f"✓ Plan created: {create_response.total_jobs} jobs across {create_response.levels} dependency levels",
                       cls="text-green-400"),
                     cls="bg-green-900/20 border border-green-500 rounded-md p-4 mb-4"
                 )
@@ -456,12 +451,12 @@ def _render_plan_status(plan_response, create_response=None):
         else:
             elements.append(
                 Div(
-                    P(f"✗ Error: {create_response.get('error', 'Unknown error')}", cls="text-red-400"),
+                    P(f"✗ Error: {create_response.error or 'Unknown error'}", cls="text-red-400"),
                     cls="bg-red-900/20 border border-red-500 rounded-md p-4 mb-4"
                 )
             )
 
-    if not plan_response.get('active'):
+    if not plan_response.active:
         elements.append(
             Card(
                 P("No active production plan", cls="text-gray-400 text-center py-8")
@@ -470,12 +465,12 @@ def _render_plan_status(plan_response, create_response=None):
         return elements
 
     # Active plan
-    plan_id = plan_response['plan_id']
-    goal_item = plan_response['goal_item']
-    goal_quantity = plan_response['goal_quantity']
-    progress = plan_response['progress']
-    is_complete = plan_response['is_complete']
-    jobs_by_status = plan_response['jobs_by_status']
+    plan_id = plan_response.plan_id
+    goal_item = plan_response.goal_item
+    goal_quantity = plan_response.goal_quantity
+    progress = plan_response.progress
+    is_complete = plan_response.is_complete
+    jobs_by_status = plan_response.jobs_by_status
 
     elements.append(
         Card(

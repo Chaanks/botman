@@ -1,12 +1,12 @@
 from dataclasses import dataclass
-from typing import Optional, List, Tuple, Any
+from typing import Optional, List, Tuple
 from abc import ABC, abstractmethod
 
 from botman.core.api import ArtifactsClient
-from botman.core.models import Character
+from botman.core.api.models import Character
 from botman.core.world import World
 from botman.core.errors import BotmanError
-from botman.core.services import BankService
+from botman.core.bank import BankService
 
 
 @dataclass

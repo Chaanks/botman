@@ -1,12 +1,7 @@
-"""Type-safe messages for orchestrator <-> bot communication."""
-
 from dataclasses import dataclass, asdict
-from typing import Dict, Any, List, TYPE_CHECKING
-from botman.core.bot import BotRole
-from botman.core.models import Skill
-
-if TYPE_CHECKING:
-    from botman.core.mrp.models import Job
+from typing import Dict, Any, List
+from botman.core.api.models import CharacterRole, Skill
+from botman.core.mrp.models import Job
 
 
 # Request Messages (Bot -> Orchestrator)
@@ -16,7 +11,7 @@ if TYPE_CHECKING:
 class QueryJobsRequest:
     """Request jobs matching bot's role and skills."""
 
-    role: BotRole
+    role: CharacterRole
     skills: List[Skill]
 
 
