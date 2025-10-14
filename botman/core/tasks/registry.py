@@ -2,7 +2,7 @@ from typing import Dict, Any, Optional, Type, List
 from dataclasses import fields
 
 from botman.core.tasks.base import Task
-from botman.core.tasks.gather import GatherTask
+from botman.core.tasks.gather import GatherTask, GatherUntilDropTask
 from botman.core.tasks.fight import FightTask
 from botman.core.tasks.deposit import DepositTask
 from botman.core.tasks.craft import CraftTask
@@ -10,6 +10,7 @@ from botman.core.tasks.withdraw import WithdrawTask
 
 TASK_REGISTRY: Dict[str, Type[Task]] = {
     "gather": GatherTask,
+    "gather_until_drop": GatherUntilDropTask,
     "fight": FightTask,
     "deposit": DepositTask,
     "craft": CraftTask,
@@ -79,7 +80,7 @@ class TaskFactory:
 
         for field in fields(task_class):
             # Skip internal/progress tracking fields
-            if field.name in ('crafted_amount', 'gathered_amount', 'items'):
+            if field.name in ('crafted_amount', 'gathered_amount', 'gather_count', 'collected_quantity', 'items', 'state', 'original_target'):
                 continue
 
             field_info = {

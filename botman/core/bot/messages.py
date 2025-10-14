@@ -24,6 +24,12 @@ class GetStatusMessage:
     pass
 
 
+@dataclass
+class SetAutonomousModeMessage:
+    """Request to enable/disable autonomous mode."""
+    enabled: bool
+
+
 # Response Messages (Outgoing from Bot)
 
 

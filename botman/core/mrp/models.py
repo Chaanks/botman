@@ -120,7 +120,7 @@ class GatherJob(Job):
     quantity: int = 0
 
     def to_tasks(self, world: "World") -> List["Task"]:
-        from botman.core.tasks.gather import GatherTask
+        from botman.core.tasks.gather import GatherUntilDropTask
         from botman.core.tasks.deposit import DepositTask
 
         resource = world.resource_from_drop(self.item_code)
@@ -128,7 +128,12 @@ class GatherJob(Job):
             raise ValueError(f"Cannot find resource that drops {self.item_code}")
 
         return [
-            GatherTask(resource_code=resource.code, target_amount=self.quantity),
+            GatherUntilDropTask(
+                resource_code=resource.code,
+                drop_code=self.item_code,
+                target_quantity=self.quantity,
+                prunable=True
+            ),
             DepositTask(deposit_all=True),
         ]
 
@@ -144,9 +149,7 @@ class CraftJob(Job):
     quantity: int = 0
 
     def to_tasks(self, world: "World") -> List["Task"]:
-        from botman.core.tasks.withdraw import WithdrawTask
-        from botman.core.tasks.craft import CraftTask
-        from botman.core.tasks.deposit import DepositTask
+        from botman.core.tasks.craft import CraftWithMaterialsTask
 
         item = world.item(self.item_code)
         if not item or not item.craft:
@@ -154,23 +157,12 @@ class CraftJob(Job):
                 f"Cannot craft {self.item_code}: item not found or not craftable"
             )
 
-        # Calculate materials needed
-        materials_needed = {}
-        recipe_output = item.craft.quantity
-        crafts_needed = (self.quantity + recipe_output - 1) // recipe_output
-
-        for req in item.craft.requirements:
-            materials_needed[req.code] = req.quantity * crafts_needed
-
-        # Create withdraw task for all materials
-        withdraw_items = [
-            {"code": code, "quantity": qty} for code, qty in materials_needed.items()
-        ]
-
         return [
-            WithdrawTask(items=withdraw_items),
-            CraftTask(item_code=self.item_code, target_amount=self.quantity),
-            DepositTask(deposit_all=True),
+            CraftWithMaterialsTask(
+                item_code=self.item_code,
+                target_quantity=self.quantity,
+                prunable=True
+            )
         ]
 
     def description(self) -> str:
@@ -179,15 +171,30 @@ class CraftJob(Job):
 
 @dataclass
 class FightJob(Job):
-    """Job for fighting monsters."""
+    """Job for fighting monsters to collect specific drops."""
 
     monster_code: str = ""
-    kill_count: int = 0
+    item_code: str = ""  # The drop item to collect
+    quantity: int = 0  # Amount of the drop to collect
 
     def to_tasks(self, world: "World") -> List["Task"]:
-        from botman.core.tasks.fight import FightTask
+        from botman.core.tasks.fight import FightUntilDropTask
+        from botman.core.tasks.deposit import DepositTask
 
-        return [FightTask(monster_code=self.monster_code, target_kills=self.kill_count)]
+        # Verify monster exists
+        monster = world.monster(self.monster_code)
+        if not monster:
+            raise ValueError(f"Monster '{self.monster_code}' not found in world data")
+
+        return [
+            FightUntilDropTask(
+                monster_code=self.monster_code,
+                drop_code=self.item_code,
+                target_quantity=self.quantity,
+                prunable=True
+            ),
+            DepositTask(deposit_all=True),
+        ]
 
     def description(self) -> str:
-        return f"Fight {self.monster_code} x{self.kill_count}"
+        return f"Fight {self.monster_code} for {self.item_code} x{self.quantity}"

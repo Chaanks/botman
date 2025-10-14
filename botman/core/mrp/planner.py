@@ -200,11 +200,8 @@ class CraftGoalPlanner(GoalPlanner):
         elif item.type == "resource":
             # Raw material that must be gathered/fought for
             if item.subtype == "mob":
-                # TODO: For MVP, skip mob drops - would need FIGHT jobs
-                logger.warning(
-                    f"Skipping mob drop {material_code} - combat not implemented in MRP MVP"
-                )
-                return []
+                # Monster drop - create fight jobs
+                return self._create_fight_jobs(material_code, quantity, level)
             else:
                 # Gathering resource (may return multiple jobs for parallelism)
                 return self._create_gather_jobs(material_code, quantity, level)
@@ -289,6 +286,67 @@ class CraftGoalPlanner(GoalPlanner):
 
         return jobs
 
+    def _create_fight_jobs(
+        self, item_code: str, quantity: int, level: int
+    ) -> List[Job]:
+        """
+        Create one or more FIGHT jobs with fragmentation for parallelism.
+
+        Static policy: Split into batches of 10 drops each.
+        Combat is slower than gathering, so use smaller batch sizes.
+        """
+        BATCH_SIZE = 10
+
+        # Find monster that drops this item
+        monster = None
+        for m in self.world.monsters.values():
+            if m.drops:
+                for drop in m.drops:
+                    if drop.code == item_code:
+                        monster = m
+                        break
+            if monster:
+                break
+
+        if not monster:
+            logger.warning(f"No monster found that drops {item_code}")
+            return []
+
+        # Calculate number of jobs needed
+        # Note: Location lookup is handled by FightTask itself
+        num_jobs = (quantity + BATCH_SIZE - 1) // BATCH_SIZE  # Ceiling division
+
+        # Split quantity across jobs
+        base_qty = quantity // num_jobs
+        remainder = quantity % num_jobs
+
+        jobs = []
+        for i in range(num_jobs):
+            # Distribute remainder across first few jobs
+            job_qty = base_qty + (1 if i < remainder else 0)
+
+            suffix = f"_part{i + 1}" if num_jobs > 1 else ""
+            job_id = f"fight_{monster.code}_{item_code}_{uuid.uuid4().hex[:6]}{suffix}"
+
+            fight_job = FightJob(
+                id=job_id,
+                type=JobType.FIGHT,
+                required_role=CharacterRole.FIGHTER,
+                monster_code=monster.code,
+                item_code=item_code,
+                quantity=job_qty,
+                location=None,  # FightTask handles location lookup
+                depends_on=set(),  # Mob drops have no dependencies (raw materials)
+                status=JobStatus.PENDING,
+            )
+
+            jobs.append(fight_job)
+            logger.debug(
+                f"Created fight job {i + 1}/{num_jobs}: {monster.code} for {item_code} x{job_qty}"
+            )
+
+        return jobs
+
     def _create_craft_job(
         self,
         item_code: str,
@@ -355,48 +413,39 @@ class CraftGoalPlanner(GoalPlanner):
 
 
 class CombatGoalPlanner(GoalPlanner):
-    """Plans combat goals (kill N monsters)."""
+    """Plans combat goals (fight monsters for specific drops)."""
 
-    def create_plan(self, monster_code: str, kill_count: int) -> Goal:
-        """Create a goal to kill N monsters."""
+    def create_plan(self, monster_code: str, item_code: str, quantity: int) -> Goal:
+        """Create a goal to fight monsters for specific drop items."""
         plan_id = str(uuid.uuid4())[:8]
         plan = Goal(
             plan_id=plan_id,
-            description=f"Kill {monster_code} x{kill_count}",
+            description=f"Fight {monster_code} for {item_code} x{quantity}",
         )
 
-        # Find monster location
+        # Verify monster exists
         monster = self.world.monster(monster_code)
         if not monster:
             logger.error(f"Monster {monster_code} not found in world data")
             return plan
 
-        # For now, create a single fight job
-        # Could split into smaller jobs for parallelism later
-        job_id = f"fight_{monster_code}_{uuid.uuid4().hex[:6]}"
-
-        # Find monster location
-        location = None
-        for content in self.world.maps.values():
-            if content.get("code") == monster_code:
-                x, y = content.get("x"), content.get("y")
-                if x is not None and y is not None:
-                    location = Position(x=x, y=y)
-                    break
+        # Create a single fight job (no fragmentation for standalone combat goals)
+        job_id = f"fight_{monster_code}_{item_code}_{uuid.uuid4().hex[:6]}"
 
         fight_job = FightJob(
             id=job_id,
             type=JobType.FIGHT,
             required_role=CharacterRole.FIGHTER,
             monster_code=monster_code,
-            kill_count=kill_count,
-            location=location,
+            item_code=item_code,
+            quantity=quantity,
+            location=None,  # FightTask handles location lookup
             depends_on=set(),
             status=JobStatus.PENDING,
         )
 
         plan.add_job(fight_job, level=0)
-        logger.info(f"Created combat plan {plan_id}: {kill_count}x {monster_code}")
+        logger.info(f"Created combat plan {plan_id}: fight {monster_code} for {item_code} x{quantity}")
         return plan
 
 

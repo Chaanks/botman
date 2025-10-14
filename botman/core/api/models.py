@@ -770,7 +770,7 @@ class Achievement(BaseModel):
     description: str
     points: int
     type: str
-    target: Optional[int] = None
+    target: Optional[str] = None  # Can be string (item/monster code) or int (quantity)
     total: Optional[int] = None
 
 
@@ -782,9 +782,9 @@ class AccountAchievement(BaseModel):
     description: str
     points: int
     type: str
-    target: Optional[int] = None
+    target: Optional[str] = None  # Can be string (item/monster code) or int (quantity)
     total: Optional[int] = None
-    progress: int
+    current: int  # Changed from "progress" to match API
     completed_at: Optional[datetime] = None
 
     @field_validator("completed_at", mode="before")

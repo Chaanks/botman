@@ -1,8 +1,18 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional, List, Dict
+from enum import Enum
 
 from botman.core.tasks.base import Task, TaskContext, TaskResult
 from botman.core.errors import APIError, RecoverableError, RetriableError
+from botman.core.bank.messages import UpdateAfterDepositMessage
+
+
+class DepositState(str, Enum):
+    """States for deposit task state machine"""
+    INIT = "init"
+    MOVING_TO_BANK = "moving_to_bank"
+    DEPOSITING = "depositing"
+    COMPLETE = "complete"
 
 
 @dataclass
@@ -17,6 +27,9 @@ class DepositTask(Task):
     quantity: Optional[int] = None
     items: Optional[List[Dict[str, any]]] = None
     deposit_all: bool = False
+
+    # Internal state
+    state: DepositState = field(default=DepositState.INIT, init=False, repr=False)
 
     def __post_init__(self):
         """Validate configuration"""
@@ -34,91 +47,136 @@ class DepositTask(Task):
         name = context.character.name
         current_pos = context.character.position
 
-        # Bank is typically at (4, 1) - we should look this up from world data
-        # For now, hardcoding bank location
+        # Bank is typically at (4, 1)
         BANK_X, BANK_Y = 4, 1
 
-        # Step 1: Move to bank if not already there
-        if (current_pos.x, current_pos.y) != (BANK_X, BANK_Y):
-            try:
-                result = await context.api.move(x=BANK_X, y=BANK_Y, name=name)
+        # State machine
+        if self.state == DepositState.INIT:
+            # Early completion check: determine what to deposit before moving
+            if self.deposit_all:
+                items_to_deposit = [
+                    {"code": item.code, "quantity": item.quantity}
+                    for item in context.character.inventory
+                    if item.code  # Filter out empty slots
+                ]
+            elif self.items:
+                items_to_deposit = self.items
+            else:
+                items_to_deposit = [{"code": self.item_code, "quantity": self.quantity}]
+
+            # Check if inventory is empty - complete early to save time
+            if not items_to_deposit:
+                self.state = DepositState.COMPLETE
                 return TaskResult(
-                    completed=False,
+                    completed=True,
+                    character=context.character,
+                    log_messages=[("No items to deposit - inventory empty", "INFO")]
+                )
+
+            # Inventory has items, proceed to bank
+            self.state = DepositState.MOVING_TO_BANK
+            return TaskResult(
+                completed=False,
+                character=context.character,
+                log_messages=[(f"Preparing to deposit {len(items_to_deposit)} item type(s)", "INFO")]
+            )
+
+        elif self.state == DepositState.MOVING_TO_BANK:
+            # Move to bank if not already there
+            if (current_pos.x, current_pos.y) != (BANK_X, BANK_Y):
+                try:
+                    result = await context.api.move(x=BANK_X, y=BANK_Y, name=name)
+                    return TaskResult(
+                        completed=False,
+                        character=result.character,
+                        log_messages=[(f"Moving to bank at ({BANK_X}, {BANK_Y})", "INFO")],
+                    )
+                except APIError as e:
+                    return TaskResult(
+                        completed=False,
+                        character=context.character,
+                        error=e,
+                        log_messages=[(f"Failed to move to bank: {e.message}", "ERROR")]
+                    )
+
+            self.state = DepositState.DEPOSITING
+            return TaskResult(completed=False, character=context.character)
+
+        elif self.state == DepositState.DEPOSITING:
+            # Prepare items list based on mode
+            if self.deposit_all:
+                items_to_deposit = [
+                    {"code": item.code, "quantity": item.quantity}
+                    for item in context.character.inventory
+                    if item.code  # Filter out empty slots
+                ]
+            elif self.items:
+                items_to_deposit = self.items
+            else:
+                items_to_deposit = [{"code": self.item_code, "quantity": self.quantity}]
+
+            # Final check in case inventory changed
+            if not items_to_deposit:
+                self.state = DepositState.COMPLETE
+                return TaskResult(
+                    completed=True,
+                    character=context.character,
+                    log_messages=[("No items to deposit", "INFO")]
+                )
+
+            # Deposit items
+            try:
+                result = await context.api.deposit_item(items=items_to_deposit, name=name)
+
+                # Notify BankActor of deposit using typed message
+                if context.bank:
+                    await context.bank.tell(
+                        UpdateAfterDepositMessage(items=items_to_deposit)
+                    )
+
+                # Build log message
+                if len(items_to_deposit) == 1:
+                    item = items_to_deposit[0]
+                    log_msg = f"Deposited {item['code']} x{item['quantity']}"
+                elif self.deposit_all:
+                    total_items = sum(item['quantity'] for item in items_to_deposit)
+                    log_msg = f"Deposited all inventory ({len(items_to_deposit)} types, {total_items} items)"
+                else:
+                    total_items = sum(item['quantity'] for item in items_to_deposit)
+                    log_msg = f"Deposited {len(items_to_deposit)} item types ({total_items} items)"
+
+                self.state = DepositState.COMPLETE
+                return TaskResult(
+                    completed=True,
                     character=result.character,
-                    log_messages=[(f"Moving to bank at ({BANK_X}, {BANK_Y})", "INFO")],
+                    log_messages=[(log_msg, "INFO"), ("Deposit complete!", "INFO")]
                 )
             except APIError as e:
+                level = "WARNING" if isinstance(e, (RecoverableError, RetriableError)) else "ERROR"
                 return TaskResult(
                     completed=False,
                     character=context.character,
                     error=e,
-                    log_messages=[(f"Failed to move to bank: {e.message}", "ERROR")]
+                    log_messages=[(f"Deposit failed: {e.message}", level)]
                 )
 
-        # Step 2: Prepare items list based on mode
-        if self.deposit_all:
-            items_to_deposit = [
-                {"code": item.code, "quantity": item.quantity}
-                for item in context.character.inventory
-                if item.code  # Filter out empty slots
-            ]
-        elif self.items:
-            items_to_deposit = self.items
-        else:
-            items_to_deposit = [{"code": self.item_code, "quantity": self.quantity}]
-
-        # Check if we have anything to deposit
-        if not items_to_deposit:
-            return TaskResult(
-                completed=True,
-                character=context.character,
-                log_messages=[("No items to deposit", "INFO")]
-            )
-
-        # Step 3: Deposit items
-        try:
-            # Debug: log what we're about to send
-            import logging
-            logger = logging.getLogger(f"botman.bot.{name}")
-            logger.debug(f"Depositing items: {items_to_deposit}")
-
-            result = await context.api.deposit_item(items=items_to_deposit, name=name)
-
-            # Notify BankActor of deposit
-            if context.bank:
-                await context.bank.tell({
-                    'type': 'update_after_deposit',
-                    'items': items_to_deposit
-                })
-
-            # Build log message
-            if len(items_to_deposit) == 1:
-                item = items_to_deposit[0]
-                log_msg = f"Deposited {item['code']} x{item['quantity']}"
-            elif self.deposit_all:
-                total_items = sum(item['quantity'] for item in items_to_deposit)
-                log_msg = f"Deposited all inventory ({len(items_to_deposit)} types, {total_items} items)"
-            else:
-                total_items = sum(item['quantity'] for item in items_to_deposit)
-                log_msg = f"Deposited {len(items_to_deposit)} item types ({total_items} items)"
-
-            return TaskResult(
-                completed=True,
-                character=result.character,
-                log_messages=[(log_msg, "INFO"), ("Deposit complete!", "INFO")]
-            )
-        except APIError as e:
-            level = "WARNING" if isinstance(e, (RecoverableError, RetriableError)) else "ERROR"
-            return TaskResult(
-                completed=False,
-                character=context.character,
-                error=e,
-                log_messages=[(f"Deposit failed: {e.message}", level)]
-            )
+        # Should not reach here
+        return TaskResult(
+            completed=True,
+            character=context.character,
+            log_messages=[("Deposit task completed", "INFO")]
+        )
 
     def progress(self) -> str:
         """Return progress indicator"""
-        return "Depositing"
+        if self.state == DepositState.INIT:
+            return "Checking inventory"
+        elif self.state == DepositState.MOVING_TO_BANK:
+            return "Moving to bank"
+        elif self.state == DepositState.DEPOSITING:
+            return "Depositing"
+        else:
+            return "Complete"
 
     def description(self) -> str:
         """Return human-readable task description"""

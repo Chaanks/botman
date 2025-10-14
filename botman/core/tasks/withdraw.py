@@ -4,6 +4,14 @@ from enum import Enum
 
 from botman.core.tasks.base import Task, TaskContext, TaskResult
 from botman.core.errors import APIError, FatalError, RecoverableError, RetriableError
+from botman.core.bank.messages import (
+    CheckItemMessage,
+    CheckItemResponse,
+    ReserveItemMessage,
+    ReserveItemResponse,
+    UpdateAfterWithdrawMessage,
+    ReleaseReservationMessage,
+)
 
 
 class WithdrawState(str, Enum):
@@ -82,44 +90,39 @@ class WithdrawTask(Task):
                 qty = item['quantity']
 
                 # Check availability
-                check_result = await context.bank.ask({
-                    'type': 'check_item',
-                    'code': item_code,
-                    'quantity': qty
-                })
+                check_result: CheckItemResponse = await context.bank.ask(
+                    CheckItemMessage(code=item_code, quantity=qty)
+                )
 
-                if not check_result.get('available'):
+                if not check_result.available:
                     return TaskResult(
                         completed=False,
                         character=context.character,
                         error=FatalError(0, f"Insufficient {item_code} in bank"),
                         log_messages=[(
-                            f"Cannot withdraw {item_code} x{qty}: only {check_result.get('free', 0)} available "
-                            f"(total: {check_result.get('total_in_bank', 0)}, reserved: {check_result.get('reserved', 0)})",
+                            f"Cannot withdraw {item_code} x{qty}: only {check_result.free} available "
+                            f"(total: {check_result.total_in_bank}, reserved: {check_result.reserved})",
                             "ERROR"
                         )]
                     )
 
                 # Reserve the item
-                reserve_result = await context.bank.ask({
-                    'type': 'reserve_item',
-                    'code': item_code,
-                    'quantity': qty,
-                    'bot_name': name
-                })
+                reserve_result: ReserveItemResponse = await context.bank.ask(
+                    ReserveItemMessage(code=item_code, quantity=qty, bot_name=name)
+                )
 
-                if not reserve_result.get('success'):
+                if not reserve_result.success:
                     # Release any reservations made so far
                     await self._release_all_reservations(context)
                     return TaskResult(
                         completed=False,
                         character=context.character,
                         error=FatalError(0, f"Failed to reserve {item_code}"),
-                        log_messages=[(f"Reservation failed: {reserve_result.get('error', 'Unknown error')}", "ERROR")]
+                        log_messages=[(f"Reservation failed: {reserve_result.error or 'Unknown error'}", "ERROR")]
                     )
 
                 # Store reservation ID
-                self.reservations[item_code] = reserve_result['reservation_id']
+                self.reservations[item_code] = reserve_result.reservation_id
 
             self.state = WithdrawState.MOVING_TO_BANK
 
@@ -178,11 +181,12 @@ class WithdrawTask(Task):
                         # Get reservation ID for this item
                         reservation_id = self.reservations.get(item_code)
                         if reservation_id:
-                            await context.bank.tell({
-                                'type': 'update_after_withdraw',
-                                'reservation_id': reservation_id,
-                                'actual_quantity': actual_qty
-                            })
+                            await context.bank.tell(
+                                UpdateAfterWithdrawMessage(
+                                    reservation_id=reservation_id,
+                                    actual_quantity=actual_qty
+                                )
+                            )
 
                 # Clear reservation tracking
                 self.reservations.clear()
@@ -227,10 +231,9 @@ class WithdrawTask(Task):
 
         for item_code, reservation_id in list(self.reservations.items()):
             try:
-                await context.bank.tell({
-                    'type': 'release_reservation',
-                    'reservation_id': reservation_id
-                })
+                await context.bank.tell(
+                    ReleaseReservationMessage(reservation_id=reservation_id)
+                )
             except Exception:
                 pass  # Best effort
 

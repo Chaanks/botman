@@ -215,14 +215,14 @@ class JobOrchestrator(Actor):
             )
 
         self.logger.info(
-            f"Creating combat goal for {msg.monster_code} x{msg.kill_count}"
+            f"Creating combat goal: fight {msg.monster_code} for {msg.item_code} x{msg.quantity}"
         )
-        plan = self.combat_planner.create_plan(msg.monster_code, msg.kill_count)
+        plan = self.combat_planner.create_plan(msg.monster_code, msg.item_code, msg.quantity)
 
         if not plan.all_jobs:
             return CreatePlanResponse(
                 success=False,
-                error=f"Could not create plan for {msg.monster_code}",
+                error=f"Could not create plan to fight {msg.monster_code} for {msg.item_code}",
             )
 
         self.active_plan = plan

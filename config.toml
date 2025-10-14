@@ -1,5 +1,8 @@
 # Botman Configuration
 
+# Account settings
+account_name = "Chaanks"
+
 [[bots]]
 name = "AAA"
 role = "fighter"

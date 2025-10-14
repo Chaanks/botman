@@ -57,10 +57,11 @@ class CreatePlanRequest:
 
 @dataclass
 class CreateCombatGoalRequest:
-    """Create a combat goal."""
+    """Create a combat goal (fight monsters for specific drops)."""
 
     monster_code: str
-    kill_count: int = 1
+    item_code: str  # The drop item to collect
+    quantity: int = 1  # Amount of the drop to collect
 
 
 @dataclass

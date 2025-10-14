@@ -31,6 +31,7 @@ from botman.core.bot.messages import (
     StatusRequestMessage,
     GetStatusMessage,
     GetStatusResponse,
+    SetAutonomousModeMessage,
 )
 from botman.web.bridge.messages import (
     BotChangedMessage,
@@ -69,6 +70,9 @@ class Bot(Actor):
 
         # Job tracking
         self.current_job_id: Optional[str] = None
+
+        # Autonomous mode - enabled by default
+        self.autonomous_mode: bool = True
 
         self.logger = logging.getLogger(f"botman.bot.{name}")
         self._last_published_state: Optional[Dict[str, Any]] = None
@@ -141,6 +145,32 @@ class Bot(Actor):
             cooldown=int(self.character.ready_in()) if self.character else 0,
         )
 
+    @on_receive.register
+    async def _(self, msg: SetAutonomousModeMessage) -> None:
+        """Handle autonomous mode toggle request."""
+        self.autonomous_mode = msg.enabled
+
+        if msg.enabled:
+            await self._log(f"Autonomous mode enabled - will perform idle behaviors")
+        else:
+            # When disabling autonomous mode, stop current activities
+            cleared_tasks = len(self.task_queue)
+            self.task_queue.clear()
+
+            if self.current_task:
+                self.current_task = None
+                await self._log(f"Autonomous mode disabled - stopped current task and cleared {cleared_tasks} queued tasks")
+            elif cleared_tasks > 0:
+                await self._log(f"Autonomous mode disabled - cleared {cleared_tasks} queued tasks")
+            else:
+                await self._log(f"Autonomous mode disabled - will only execute manual tasks and jobs")
+
+            # Clear current job tracking (bot can claim new jobs later)
+            self.current_job_id = None
+
+        await self._publish_status()
+        return None
+
     async def _execution_loop(self):
         while self._running:
             try:
@@ -154,12 +184,12 @@ class Bot(Actor):
                     self.current_task = self.task_queue.pop(0)
                     await self._log(f"Starting task: {self.current_task.description()}")
 
-                # Priority 2: If no task, poll job board
+                # Priority 2: If no task, poll job board (independent of autonomous mode)
                 if not self.current_task and not self.task_queue and self.orchestrator:
                     await self._poll_and_claim_job()
 
-                # Priority 3: If still idle, perform default role-based behavior
-                if not self.current_task and not self.task_queue:
+                # Priority 3: If still idle and autonomous mode enabled, perform default role-based behavior
+                if not self.current_task and not self.task_queue and self.autonomous_mode:
                     await self._perform_idle_behavior()
 
                 if self.current_task:
@@ -317,6 +347,7 @@ class Bot(Actor):
             "cooldown": int(self.character.ready_in()) if self.character else 0,
             "character": self.character,
             "queue_size": len(self.task_queue),
+            "autonomous_mode": self.autonomous_mode,
         }
 
         # Only publish if state changed (excluding character object which always differs)
@@ -326,6 +357,7 @@ class Bot(Actor):
             bot_data["progress"],
             bot_data["queue_size"],
             bot_data["cooldown"],
+            bot_data["autonomous_mode"],
         )
 
         if force or self._last_published_state != state_key:
@@ -385,7 +417,7 @@ class Bot(Actor):
 
         # CRAFTER: Level up primary crafting skill
         elif self.role == CharacterRole.CRAFTER and self.skills:
-            resource = "ash_tree"
+            resource = "spruce_tree"
             task = GatherTask(resource_code=resource, target_amount=100)
             self.task_queue.append(task)
             self.task_queue.append(DepositTask(deposit_all=True))
@@ -394,7 +426,7 @@ class Bot(Actor):
 
         # SUPPORT: Gather resources for consumables (fishing/cooking/alchemy)
         elif self.role == CharacterRole.SUPPORT and self.skills:
-            primary_skill = self.skills[0]
+            primary_skill = self.skills[2]
             skill_level = self._get_skill_level(primary_skill)
 
             # Support roles gather like gatherers

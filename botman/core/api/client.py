@@ -461,7 +461,7 @@ class ArtifactsClient:
         if completed is not None:
             params.append(f"completed={str(completed).lower()}")
         endpoint = f"/accounts/{account}/achievements?{'&'.join(params)}"
-        data = await self._request("GET", endpoint)
+        data = await self._request_paginated("GET", endpoint)
         return AccountAchievementPage.model_validate(data)
 
     async def get_public_account(self, account: str) -> PublicAccount:
